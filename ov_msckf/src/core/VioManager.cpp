@@ -163,6 +163,48 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
   }
 }
 
+void VioManager::feed_measurement_batch_imu(const std::vector<ov_core::ImuData>& messages, double target_freq_hz) {
+    if (messages.empty()) return;
+
+    // Calculate oldest time needed once for the whole batch
+    double oldest_time = state->margtimestep();
+    if (oldest_time > state->_timestamp) {
+        oldest_time = -1;
+    }
+    if (!is_initialized_vio) {
+        oldest_time = messages.back().timestamp - params.init_options.init_window_time + 
+                     state->_calib_dt_CAMtoIMU->value()(0) - 0.10;
+    }
+
+    // Downsample if requested
+    std::vector<ov_core::ImuData> processed_messages;
+    if (target_freq_hz > 0.0) {
+        double dt = 1.0 / target_freq_hz;
+        double next_time = messages.front().timestamp;
+        
+        for (const auto& msg : messages) {
+            if (msg.timestamp >= next_time) {
+                processed_messages.push_back(msg);
+                next_time += dt;
+            }
+        }
+    } else {
+        processed_messages = messages;
+    }
+
+    // Use batch methods for each component
+    propagator->feed_imu_batch(processed_messages, oldest_time);
+
+    if (!is_initialized_vio) {
+        initializer->feed_imu_batch(processed_messages, oldest_time);
+    }
+
+    if (is_initialized_vio && updaterZUPT != nullptr && 
+        (!params.zupt_only_at_beginning || !has_moved_since_zupt)) {
+        updaterZUPT->feed_imu_batch(processed_messages, oldest_time);
+    }
+}
+
 void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
 
   // The oldest time we need IMU with is the last clone

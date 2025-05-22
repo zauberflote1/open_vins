@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.3)
 find_package(catkin QUIET COMPONENTS roscpp ov_core)
 
 # Describe ROS project
+option(ENABLE_ROS "Enable or disable building with ROS (if it is found)" ON)
 if (catkin_FOUND AND ENABLE_ROS)
     add_definitions(-DROS_AVAILABLE=1)
     catkin_package(
@@ -17,7 +18,7 @@ else ()
     include(GNUInstallDirs)
     set(CATKIN_PACKAGE_LIB_DESTINATION "${CMAKE_INSTALL_LIBDIR}")
     set(CATKIN_PACKAGE_BIN_DESTINATION "${CMAKE_INSTALL_BINDIR}")
-    set(CATKIN_GLOBAL_INCLUDE_DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/open_vins/")
+    set(CATKIN_GLOBAL_INCLUDE_DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif ()
 
 # Include our header files
@@ -37,25 +38,6 @@ list(APPEND thirdparty_libraries
         ${catkin_LIBRARIES}
 )
 
-# If we are not building with ROS then we need to manually link to its headers
-# This isn't that elegant of a way, but this at least allows for building without ROS
-# See this stackoverflow answer: https://stackoverflow.com/a/11217008/7718197
-if (NOT catkin_FOUND OR NOT ENABLE_ROS)
-
-    message(STATUS "MANUALLY LINKING TO OV_CORE LIBRARY....")
-    file(GLOB_RECURSE OVCORE_LIBRARY_SOURCES "${CMAKE_SOURCE_DIR}/../ov_core/src/*.cpp")
-    list(FILTER OVCORE_LIBRARY_SOURCES EXCLUDE REGEX ".*test_profile\\.cpp$")
-    list(FILTER OVCORE_LIBRARY_SOURCES EXCLUDE REGEX ".*test_webcam\\.cpp$")
-    list(FILTER OVCORE_LIBRARY_SOURCES EXCLUDE REGEX ".*test_tracking\\.cpp$")
-    list(APPEND LIBRARY_SOURCES ${OVCORE_LIBRARY_SOURCES})
-    include_directories(${CMAKE_SOURCE_DIR}/../ov_core/src/)
-    install(DIRECTORY ${CMAKE_SOURCE_DIR}/../ov_core/src/
-            DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}
-            FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
-    )
-
-endif ()
-
 ##################################################
 # Make the shared library
 ##################################################
@@ -73,6 +55,17 @@ list(APPEND LIBRARY_SOURCES
 )
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")
 add_library(ov_init_lib SHARED ${LIBRARY_SOURCES} ${LIBRARY_HEADERS})
+
+# If we are not building with ROS then we need to manually link to its headers
+# This isn't that elegant of a way, but this at least allows for building without ROS
+# See this stackoverflow answer: https://stackoverflow.com/a/11217008/7718197
+if (NOT catkin_FOUND OR NOT ENABLE_ROS)
+
+    message(STATUS "MANUALLY LINKING TO OV_CORE LIBRARY....")
+    include_directories(${CMAKE_SOURCE_DIR}/../ov_core/src/)
+    target_link_libraries(ov_init_lib ov_core_lib)
+endif ()
+
 target_link_libraries(ov_init_lib ${thirdparty_libraries})
 target_include_directories(ov_init_lib PUBLIC src/)
 install(TARGETS ov_init_lib
@@ -90,36 +83,28 @@ install(DIRECTORY src/
 # Make binary files!
 ##################################################
 
-if (catkin_FOUND AND ENABLE_ROS)
+# add_executable(test_simulation src/test_simulation.cpp)
+# target_link_libraries(test_simulation ov_init_lib ${thirdparty_libraries})
+# install(TARGETS test_simulation
+#         ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+#         LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+#         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+# )
 
-    install(DIRECTORY launch/
-            DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
-    )
+# add_executable(test_dynamic_mle src/test_dynamic_mle.cpp)
+# target_link_libraries(test_dynamic_mle ov_init_lib ${thirdparty_libraries})
+# install(TARGETS test_dynamic_mle
+#         ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+#         LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+#         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+# )
 
-endif ()
-
-add_executable(test_simulation src/test_simulation.cpp)
-target_link_libraries(test_simulation ov_init_lib ${thirdparty_libraries})
-install(TARGETS test_simulation
-        ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-
-add_executable(test_dynamic_mle src/test_dynamic_mle.cpp)
-target_link_libraries(test_dynamic_mle ov_init_lib ${thirdparty_libraries})
-install(TARGETS test_dynamic_mle
-        ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-
-add_executable(test_dynamic_init src/test_dynamic_init.cpp)
-target_link_libraries(test_dynamic_init ov_init_lib ${thirdparty_libraries})
-install(TARGETS test_dynamic_init
-        ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
+# add_executable(test_dynamic_init src/test_dynamic_init.cpp)
+# target_link_libraries(test_dynamic_init ov_init_lib ${thirdparty_libraries})
+# install(TARGETS test_dynamic_init
+#         ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+#         LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+#         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+# )
 
 

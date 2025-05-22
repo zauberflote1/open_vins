@@ -1014,3 +1014,19 @@ Eigen::MatrixXd Propagator::compute_H_Tg(std::shared_ptr<State> state, const Eig
   H_Tg << a_1 * I_3x3, a_2 * I_3x3, a_3 * I_3x3;
   return H_Tg;
 }
+
+void Propagator::feed_imu_batch(const std::vector<ov_core::ImuData>& messages, double oldest_time) {
+    if (messages.empty()) return;
+
+    // Insert all measurements at once with a single lock
+    std::lock_guard<std::mutex> lck(imu_data_mtx);
+    imu_data.reserve(imu_data.size() + messages.size()); // Pre-allocate space
+    for (const auto& msg : messages) {
+        imu_data.emplace_back(msg);
+    }
+
+    // Clean old measurements if needed
+    if (oldest_time != -1) {
+        clean_old_imu_measurements(oldest_time - 0.10);
+    }
+}

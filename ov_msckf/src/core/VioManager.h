@@ -90,6 +90,13 @@ public:
                                    const std::vector<std::vector<std::pair<size_t, Eigen::VectorXf>>> &feats);
 
   /**
+   * @brief Feed a batch of IMU measurements with optional downsampling
+   * @param messages Vector of IMU measurements to process
+   * @param target_freq_hz Target frequency to downsample to (0 for no downsampling)
+   */
+  void feed_measurement_batch_imu(const std::vector<ov_core::ImuData>& messages, double target_freq_hz = 0.0);
+
+  /**
    * @brief Given a state, this will initialize our IMU state.
    * @param imustate State in the MSCKF ordering: [time(sec),q_GtoI,p_IinG,v_IinG,b_gyro,b_accel]
    */
