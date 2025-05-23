@@ -26,6 +26,7 @@
 #include "feat/FeatureInitializer.h"
 #include "track/TrackAruco.h"
 #include "track/TrackDescriptor.h"
+#include "track/TrackOCL/TrackOCL.h"
 #include "track/TrackKLT.h"
 #include "track/TrackSIM.h"
 #include "types/Landmark.h"
@@ -130,9 +131,15 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
   // NOTE: we will split the total number of features over all cameras uniformly
   int init_max_features = std::floor((double)params.init_options.init_max_features / (double)params.state_options.num_cameras);
   if (params.use_klt) {
-    trackFEATS = std::shared_ptr<TrackBase>(new TrackKLT(state->_cam_intrinsics_cameras, init_max_features,
-                                                         state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
-                                                         params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist));
+    if (params.use_gpu) {
+      trackFEATS = std::shared_ptr<TrackBase>(new TrackOCL(state->_cam_intrinsics_cameras, init_max_features,
+                                                          state->_options.max_aruco_features, 
+                                                          params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist));
+    } else {
+      trackFEATS = std::shared_ptr<TrackBase>(new TrackKLT(state->_cam_intrinsics_cameras, init_max_features,
+                                                          state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
+                                                          params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist));
+    }
   } else {
     trackFEATS = std::shared_ptr<TrackBase>(new TrackDescriptor(
         state->_cam_intrinsics_cameras, init_max_features, state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
