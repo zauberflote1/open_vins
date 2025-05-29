@@ -234,7 +234,6 @@ void TrackOCL::feed_monocular_gpu_buf(const CameraData &message, size_t msg_id)
         
         // Save the current image and pyramid
         std::lock_guard<std::mutex> lckv(mtx_last_vars);
-        printf("good left size: %d\n", good_left.size());
         pts_last[cam_id] = good_left;
         ids_last[cam_id] = good_ids_left;
         
