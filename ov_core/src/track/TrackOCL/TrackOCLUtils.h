@@ -78,6 +78,7 @@ public:
     // Kernels used for pyramid construction and point tracking
     cl_kernel track_kernel      = nullptr;
     cl_kernel downfilter_kernel = nullptr;
+    cl_kernel copy_kernel       = nullptr;
     //EXPERIEMENTAL PIXEL REFINENMENT WITH GPU
     cl_kernel refine_kernel = nullptr; 
     cl_mem refined_pts_buf = nullptr;
@@ -85,6 +86,7 @@ public:
     // Kernels used for feature point extraction 
     cl_kernel extract_kernel = nullptr;
     cl_kernel nms_kernel     = nullptr;
+    cl_kernel extract_whole_img_kernel = nullptr;
 
     // Pointers to pyramids for the "previous" and "next" frames
     ocl_pyramid* prev_pyr = nullptr;
@@ -132,11 +134,12 @@ public:
 
     void swap_pyr_pointers();
     int build_next_pyramid(const void* frame);
+    int build_next_pyramid_gpu_buf(const cl_mem frame);
     int run_tracking_step(int n_points, float* prev_pts);
     
 
 
-int refine_points_subpixel(int n_points, int win_size, int max_iters, float epsilon);
+    int refine_points_subpixel(int n_points, int win_size, int max_iters, float epsilon);
 
     int read_results(int n_points, float* next_pts_out, uchar* status_out, float* err_out);
 

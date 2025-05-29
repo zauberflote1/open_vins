@@ -143,6 +143,8 @@ public:
     feat_tracks_uvd = active_tracks_uvd;
   }
 
+  cl_context get_ocl_context() const { return trackFEATS->get_ocl_context(); }
+
 protected:
   /**
    * @brief Given a new set of camera images, this will track them.
