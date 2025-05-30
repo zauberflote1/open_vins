@@ -87,6 +87,7 @@ public:
     cl_kernel extract_kernel = nullptr;
     cl_kernel nms_kernel     = nullptr;
     cl_kernel extract_whole_img_kernel = nullptr;
+    cl_kernel nms_v2_kernel = nullptr;
 
     // Pointers to pyramids for the "previous" and "next" frames
     ocl_pyramid* prev_pyr = nullptr;
@@ -108,6 +109,11 @@ public:
         if (queue) clReleaseCommandQueue(queue);
         if (track_kernel) clReleaseKernel(track_kernel);
         if (downfilter_kernel) clReleaseKernel(downfilter_kernel);
+        if (copy_kernel) clReleaseKernel(copy_kernel);
+        if (extract_kernel) clReleaseKernel(extract_kernel);
+        if (nms_kernel) clReleaseKernel(nms_kernel);
+        if (extract_whole_img_kernel) clReleaseKernel(extract_whole_img_kernel);
+        if (nms_v2_kernel) clReleaseKernel(nms_v2_kernel);
         //EXPERIEMENTAL PIXEL REFINENMENT WITH GPU
         destroy_tracking_buffers();
             

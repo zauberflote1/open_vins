@@ -351,14 +351,14 @@ class Grider_OCL {
         }
 
 
-        err  = clSetKernelArg(tracker->nms_kernel, 0, sizeof(cl_mem), &tracker->detection_buf.xy_pts_buf);
-        err |= clSetKernelArg(tracker->nms_kernel, 1, sizeof(cl_mem), &tracker->detection_buf.xyz_pts_buf); // + (max_keypoints * 3 + 1) * sizeof(int) * k);
-        err |= clSetKernelArg(tracker->nms_kernel, 2, sizeof(cl_mem), &img);
-        err |= clSetKernelArg(tracker->nms_kernel, 3, sizeof(int),    &step);
-        err |= clSetKernelArg(tracker->nms_kernel, 4, sizeof(int),    &img_offset);
-        err |= clSetKernelArg(tracker->nms_kernel, 5, sizeof(int),    &h);      // Number of rows
-        err |= clSetKernelArg(tracker->nms_kernel, 6, sizeof(int),    &w);      // Number of cols
-        err |= clSetKernelArg(tracker->nms_kernel, 8, sizeof(int),    &max_keypoints); // Max keypoints
+        err  = clSetKernelArg(tracker->nms_v2_kernel, 0, sizeof(cl_mem), &tracker->detection_buf.xy_pts_buf);
+        err |= clSetKernelArg(tracker->nms_v2_kernel, 1, sizeof(cl_mem), &tracker->detection_buf.xyz_pts_buf); // + (max_keypoints * 3 + 1) * sizeof(int) * k);
+        err |= clSetKernelArg(tracker->nms_v2_kernel, 2, sizeof(cl_mem), &img);
+        err |= clSetKernelArg(tracker->nms_v2_kernel, 3, sizeof(int),    &step);
+        err |= clSetKernelArg(tracker->nms_v2_kernel, 4, sizeof(int),    &img_offset);
+        err |= clSetKernelArg(tracker->nms_v2_kernel, 5, sizeof(int),    &h);      // Number of rows
+        err |= clSetKernelArg(tracker->nms_v2_kernel, 6, sizeof(int),    &w);      // Number of cols
+        err |= clSetKernelArg(tracker->nms_v2_kernel, 8, sizeof(int),    &max_keypoints); // Max keypoints
         if (err != CL_SUCCESS) {
             printf("Error setting nonmax_supression_k arg: %d\n", err);
             return;
@@ -390,11 +390,11 @@ class Grider_OCL {
 
             size_t offset = (max_keypoints * 3 + 1) * sizeof(int) * k;
 
-            err |= clSetKernelArg(tracker->nms_kernel, 7, sizeof(int),    &offset);       // Offset
+            err |= clSetKernelArg(tracker->nms_v2_kernel, 7, sizeof(int),    &offset);       // Offset
 
             size_t work[] = { (size_t)max_keypoints };
 
-            err = clEnqueueNDRangeKernel(tracker->queue, tracker->nms_kernel, 1, NULL, work, NULL, 1, &keypoints_events[k], &nonmax_events[k]);
+            err = clEnqueueNDRangeKernel(tracker->queue, tracker->nms_v2_kernel, 1, NULL, work, NULL, 1, &keypoints_events[k], &nonmax_events[k]);
 
             if (err != CL_SUCCESS) {
                 printf("Error running nonmax_supression_k: %d\n", err);

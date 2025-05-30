@@ -991,9 +991,45 @@ void FAST_findKeypoints_wholeImg(
 }
 
 
-
 __kernel
 void FAST_nonmaxSupression(
+    __global const int* kp_in, volatile __global int* kp_out,
+    __global const uchar * _img, int step, int img_offset,
+    int rows, int cols, int counter, int max_keypoints)
+{
+    const int idx = get_global_id(0);
+
+    if (idx < counter)
+    {
+        int x = kp_in[1 + 2*idx];
+        int y = kp_in[2 + 2*idx];
+        __global const uchar* img = _img + mad24(y, step, x + img_offset);
+
+        int s = cornerScore(img, step);
+
+        if( (x < 4 || s > cornerScore(img-1, step)) +
+            (y < 4 || s > cornerScore(img-step, step)) != 2 )
+            return;
+        if( (x >= cols - 4 || s > cornerScore(img+1, step)) +
+            (y >= rows - 4 || s > cornerScore(img+step, step)) +
+            (x < 4 || y < 4 || s > cornerScore(img-step-1, step)) +
+            (x >= cols - 4 || y < 4 || s > cornerScore(img-step+1, step)) +
+            (x < 4 || y >= rows - 4 || s > cornerScore(img+step-1, step)) +
+            (x >= cols - 4 || y >= rows - 4 || s > cornerScore(img+step+1, step)) == 6)
+        {
+            int new_idx = atomic_inc(kp_out);
+            if( new_idx < max_keypoints )
+            {
+                kp_out[1 + 3*new_idx] = x;
+                kp_out[2 + 3*new_idx] = y;
+                kp_out[3 + 3*new_idx] = s;
+            }
+        }
+    }
+}
+
+__kernel
+void FAST_nonmaxSupression_v2(
     __global const int* kp_in, volatile __global int* kp_out,
     __global const uchar * _img, int step, int img_offset,
     int rows, int cols, int offset, int max_keypoints)
@@ -1197,6 +1233,13 @@ int OCLTracker::build_ocl_kernels(cl_program program, cl_program detect_program,
     }
 
     this->nms_kernel = clCreateKernel(detect_program, "FAST_nonmaxSupression", &err);
+    if (err != CL_SUCCESS) 
+    {
+        printf("Error creating nms_kernel from program!\n");
+        return 1;
+    }
+    
+    this->nms_v2_kernel = clCreateKernel(detect_program, "FAST_nonmaxSupression_v2", &err);
     if (err != CL_SUCCESS) 
     {
         printf("Error creating nms_kernel from program!\n");
