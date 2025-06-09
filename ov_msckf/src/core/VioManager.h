@@ -143,7 +143,10 @@ public:
     feat_tracks_uvd = active_tracks_uvd;
   }
 
+  // Returns the OpenCL context if we are using the GPU for feature tracking 
   cl_context get_ocl_context() const { return trackFEATS->get_ocl_context(); }
+
+  std::shared_ptr<ov_core::TrackBase> get_track_feats() { return trackFEATS; }
 
 protected:
   /**
