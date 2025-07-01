@@ -42,7 +42,6 @@ void TrackOCL::feed_new_camera(const CameraData &message) {
         PRINT_ERROR(RED "[ERROR]: MESSAGE DATA SIZES DO NOT MATCH OR EMPTY!!!\n" RESET);
         PRINT_ERROR(RED "[ERROR]:   - message.sensor_ids.size() = %zu\n" RESET, message.sensor_ids.size());
         PRINT_ERROR(RED "[ERROR]:   - message.images.size() = %zu\n" RESET, message.images.size());
-        PRINT_ERROR(RED "[ERROR]:   - message.cl_images.size() = %zu\n" RESET, message.cl_images.size());
         PRINT_ERROR(RED "[ERROR]:   - message.masks.size() = %zu\n" RESET, message.masks.size());
         std::exit(EXIT_FAILURE);
     }
