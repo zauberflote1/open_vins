@@ -618,6 +618,16 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
     feat->to_delete = true;
   }
 
+  // Append used features to the timestamp-based map
+  std::vector<std::shared_ptr<ov_core::Feature>> all_used_features;
+  all_used_features.insert(all_used_features.end(), featsup_MSCKF.begin(), featsup_MSCKF.end());
+  all_used_features.insert(all_used_features.end(), feats_slam_UPDATE.begin(), feats_slam_UPDATE.end());
+  all_used_features.insert(all_used_features.end(), feats_slam_DELAYED.begin(), feats_slam_DELAYED.end());
+  
+  if (!all_used_features.empty()) {
+    used_features_map[state->_timestamp] = all_used_features;
+  }
+
   //===================================================================================
   // Cleanup, marginalize out what we don't need any more...
   //===================================================================================
@@ -638,6 +648,17 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
     trackFEATS->get_feature_database()->cleanup_measurements(state->margtimestep());
     if (trackARUCO != nullptr) {
       trackARUCO->get_feature_database()->cleanup_measurements(state->margtimestep());
+    }
+    
+    // Cleanup old entries from used_features_map
+    // change this for dynamic reset
+    auto it = used_features_map.begin();
+    while (it != used_features_map.end()) {
+      if (it->first < state->margtimestep()) {
+        it = used_features_map.erase(it);
+      } else {
+        ++it;
+      }
     }
   }
 
