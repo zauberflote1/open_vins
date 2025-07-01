@@ -64,13 +64,6 @@ class TrackOCL : public TrackBase {
     void feed_monocular(const CameraData &message, size_t msg_id);
 
     /**
-     * @brief Process a new monocular image
-     * @param message Contains our timestamp, images, and camera ids
-     * @param msg_id the camera index in message data vector
-     */
-    void feed_monocular_gpu_buf(const CameraData &message, size_t msg_id);
-
-    /**
      * @brief Detects new features in the current image
      * @param img0pyr image we will detect features on (first level of pyramid)
      * @param mask0 mask which has what ROI we do not want features in
@@ -83,9 +76,6 @@ class TrackOCL : public TrackBase {
      */
     void perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
                                      std::vector<size_t> &ids0, int id);
-
-    void perform_detection_monocular_gpu_buf(const cl_mem img_buf, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
-                                             std::vector<size_t> &ids0, int id);
                                      
 
     /**
