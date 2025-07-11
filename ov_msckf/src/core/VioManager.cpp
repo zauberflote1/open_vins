@@ -625,7 +625,12 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   all_used_features.insert(all_used_features.end(), feats_slam_DELAYED.begin(), feats_slam_DELAYED.end());
   
   if (!all_used_features.empty()) {
-    used_features_map[state->_timestamp] = all_used_features;
+    if (used_features_map.find(state->_timestamp) != used_features_map.end()) {
+      used_features_map[state->_timestamp].insert(used_features_map[state->_timestamp].end(), 
+                                                  all_used_features.begin(), all_used_features.end());
+    } else {
+      used_features_map[state->_timestamp] = all_used_features;
+    }
   }
 
   //===================================================================================
