@@ -225,6 +225,23 @@ bool FeatureInitializer::single_triangulation_1d(std::shared_ptr<Feature> feat,
   // Store it in our feature object
   feat->p_FinA = p_f;
   feat->p_FinG = R_GtoA.transpose() * feat->p_FinA + p_AinG;
+
+  // compute quality as in main triangulation
+  {
+    int inliers = 0; int total_obs = 0;
+    for(auto const &pair: feat->timestamps){
+        for(size_t m=0;m<feat->timestamps.at(pair.first).size();m++){
+            total_obs++;
+            const auto &R_GtoCi = clonesCAM.at(pair.first).at(feat->timestamps.at(pair.first).at(m)).Rot();
+            const auto &p_CiinG = clonesCAM.at(pair.first).at(feat->timestamps.at(pair.first).at(m)).pos();
+            Eigen::Vector3d p_FinCi = R_GtoCi * (feat->p_FinG - p_CiinG);
+            Eigen::Vector2d reproj(p_FinCi(0)/p_FinCi(2), p_FinCi(1)/p_FinCi(2));
+            Eigen::Vector2d obs(feat->uvs_norm.at(pair.first).at(m)(0), feat->uvs_norm.at(pair.first).at(m)(1));
+            if( (reproj-obs).norm() < RANSAAC_THRESHOLD) inliers++;
+        }
+    }
+    feat->quality = static_cast<float>(inliers) / std::max(1, total_obs);
+  }
   return true;
 }
 
