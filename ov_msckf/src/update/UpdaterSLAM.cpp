@@ -348,10 +348,13 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
       feat.anchor_cam_id = landmark->_anchor_cam_id;
       feat.anchor_clone_timestamp = landmark->_anchor_clone_timestamp;
       feat.p_FinA = landmark->get_xyz(false);
+      // (*it2)->p_FinA = feat.p_FinA;
       feat.p_FinA_fej = landmark->get_xyz(true);
+      (*it2)->p_FinA = feat.p_FinA_fej;
     } else {
       feat.p_FinG = landmark->get_xyz(false);
       feat.p_FinG_fej = landmark->get_xyz(true);
+      (*it2)->p_FinG = feat.p_FinG_fej;
     }
 
     // Our return values (feature jacobian, state jacobian, residual, and order of state jacobian)
