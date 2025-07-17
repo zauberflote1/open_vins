@@ -116,7 +116,7 @@ void TrackOCL::feed_monocular(const CameraData &message, size_t msg_id) {
 
         cv::Mat img_float;
         message.images[msg_id].convertTo(img_float, CV_32F);
-        ocl_manager.cam_track[cam_id]->build_next_pyramid(img_float.data);
+        mgr.getTracker(cam_id)->buildNextPyramid(img_float.data);
         return;
     }
 
@@ -130,8 +130,8 @@ void TrackOCL::feed_monocular(const CameraData &message, size_t msg_id) {
     perform_detection_monocular(img_pyramid_last[cam_id], img_mask_last[cam_id], pts_left_old, ids_left_old, cam_id);
     rT3 = boost::posix_time::microsec_clock::local_time();
 
-    ocl_manager.cam_track[cam_id]->swap_pyr_pointers();
-    ocl_manager.cam_track[cam_id]->build_next_pyramid(img_float.data);
+    mgr.getTracker(cam_id)->swapPyramids();
+    mgr.getTracker(cam_id)->buildNextPyramid(img_float.data);
 
     // Our return success masks, and predicted new features
     std::vector<uchar> mask_ll;
@@ -304,8 +304,7 @@ void TrackOCL::perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, 
         }
     }
     std::vector<cv::KeyPoint> pts0_ext;
-    Grider_OCL::perform_griding(this->ocl_manager.cam_track[cam_id], img0pyr.at(0), mask0_updated, valid_locs, pts0_ext, num_features, grid_x, grid_y, threshold, true);
-
+    Grider_OCL::perform_griding(mgr.getTracker(cam_id), img0pyr.at(0), mask0_updated, valid_locs, pts0_ext, num_features, grid_x, grid_y, threshold, true); 
 
     auto rT3 = boost::posix_time::microsec_clock::local_time();
     PRINT_DEBUG("[TIME-DTCT]: %.4f seconds for grid detection\n", (rT3 - rT2).total_microseconds() * 1e-6);   
@@ -382,7 +381,7 @@ void TrackOCL::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::
     std::vector<float> error;
 
     int n_points = pts0.size();
-    ocl_manager.cam_track[id0]->run_tracking_step(n_points, (float*)pts_out.data());
+    mgr.getTracker(id0)->runTrackingStep(n_points, (float*)pts_out.data());
 
     size_t buffer_size = n_points * sizeof(float) * 2;
 
@@ -391,7 +390,7 @@ void TrackOCL::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::
     error.resize(n_points);
     tracked_pts.resize(n_points * 2);
 
-    ocl_manager.cam_track[id0]->read_results(n_points, tracked_pts.data(), mask_klt.data(), error.data());
+    mgr.getTracker(id0)->readResults(n_points, tracked_pts.data(), mask_klt.data(), error.data());
 
     for (int i = 0; i < n_points; i++) 
     {

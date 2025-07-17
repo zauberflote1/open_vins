@@ -2,8 +2,8 @@
 #define OV_CORE_TRACK_OCL_H
 
 #include "../TrackBase.h"
-#include "TrackOCLUtils.h"
 #include "cam/CamBase.h"
+#include <modal_flow_ocl_manager.h>
 
 namespace ov_core {
 
@@ -28,7 +28,7 @@ class TrackOCL : public TrackBase {
     explicit TrackOCL(std::unordered_map<size_t, std::shared_ptr<CamBase>> cameras, int numfeats, int numaruco,
                       int fast_threshold, int gridx, int gridy, int minpxdist)
         : TrackBase(cameras, numfeats, numaruco, false, NONE), threshold(fast_threshold), grid_x(gridx), grid_y(gridy),
-          min_px_dist(minpxdist) {
+          min_px_dist(minpxdist), mgr(VoxlOCLManager::instance()) {
             if (cameras.empty() || !cameras.at(0)) {
               throw std::runtime_error("Invalid camera data");
             }
@@ -38,8 +38,12 @@ class TrackOCL : public TrackBase {
             int height = cameras.at(0)->h();
 
             // Initialize OpenCL manager
-            int err = this->ocl_manager.init(cameras.size(), width, height, pyr_levels); 
-            printf("initialized ocl manager\n"); 
+            cl_image_format fmt{};
+            fmt.image_channel_order     = CL_R;
+            fmt.image_channel_data_type = CL_FLOAT;
+            for(int i = 0; i < cameras.size(); i++) {
+              mgr.createTracker(i, width, height, pyr_levels, fmt);
+            }
           }
 
     /**
@@ -52,8 +56,6 @@ class TrackOCL : public TrackBase {
      * @brief set pyramid levels
      */
     void set_pyramid_levels(int levels) { pyr_levels = levels; };
-
-    cl_context get_ocl_context() const override { return ocl_manager.context; }
 
   protected:
     /**
@@ -107,12 +109,13 @@ class TrackOCL : public TrackBase {
     int pyr_levels = 5;
     cv::Size win_size = cv::Size(15, 15);
 
-    OCLManager ocl_manager;
-
     // Last set of image pyramids
     std::map<size_t, std::vector<cv::Mat>> img_pyramid_last;
     std::map<size_t, cv::Mat> img_curr;
     std::map<size_t, std::vector<cv::Mat>> img_pyramid_curr;
+  
+private:
+    VoxlOCLManager& mgr;
 };
 
 } // namespace ov_core
