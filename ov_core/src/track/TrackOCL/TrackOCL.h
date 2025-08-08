@@ -4,13 +4,18 @@
 #include "../TrackBase.h"
 #include "cam/CamBase.h"
 #include <modal_flow_ocl_manager.h>
+#include <ocl/OclDevice.hpp>
+#include <ocl/ManagerCL.hpp>
+#include <modal_flow/Types.hpp>
 
-namespace ov_core {
+namespace ov_core
+{
 
-/**
- * @brief Leveraging OpenCL + GPU to perform KLT tracking of features.
- */
-class TrackOCL : public TrackBase {
+  /**
+   * @brief Leveraging OpenCL + GPU to perform KLT tracking of features.
+   */
+  class TrackOCL : public TrackBase
+  {
 
   public:
     /**
@@ -27,24 +32,48 @@ class TrackOCL : public TrackBase {
      */
     explicit TrackOCL(std::unordered_map<size_t, std::shared_ptr<CamBase>> cameras, int numfeats, int numaruco,
                       int fast_threshold, int gridx, int gridy, int minpxdist)
-        : TrackBase(cameras, numfeats, numaruco, false, NONE), threshold(fast_threshold), grid_x(gridx), grid_y(gridy),
-          min_px_dist(minpxdist), mgr(VoxlOCLManager::instance()) {
-            if (cameras.empty() || !cameras.at(0)) {
-              throw std::runtime_error("Invalid camera data");
-            }
+        : TrackBase(cameras, numfeats, numaruco, false, NONE),
+          threshold(fast_threshold),
+          grid_x(gridx),
+          grid_y(gridy),
+          min_px_dist(minpxdist),
+          mgr(VoxlOCLManager::instance()),
+          dev_(modal_flow::ocl::OclDevice::Instance()),
+          mgr_(dev_)
+    {
+      if (cameras.empty() || !cameras.at(0))
+      {
+        throw std::runtime_error("Invalid camera data");
+      }
 
-            // Retrieve width and height
-            int width = cameras.at(0)->w();
-            int height = cameras.at(0)->h();
+      // Create and set detector
+      auto det = std::make_unique<modal_flow::ocl::DetectorCL>(dev_, 3);
+      mgr_.set_detector(std::move(det));
 
-            // Initialize OpenCL manager
-            cl_image_format fmt{};
-            fmt.image_channel_order     = CL_R;
-            fmt.image_channel_data_type = CL_FLOAT;
-            for(int i = 0; i < cameras.size(); i++) {
-              mgr.createTracker(i, width, height, pyr_levels, fmt);
-            }
-          }
+      // create and set tracker
+      auto trk = std::make_unique<modal_flow::ocl::TrackerCL>(dev_);
+      mgr_.set_tracker(std::move(trk));
+
+      for (auto const &[camId, camPtr] : cameras)
+      {
+        //  assumes track input frames will be uint8_t grayscale
+        modal_flow::Camera cam{.id = camId, .width = camPtr->w(), .height = camPtr->h(), .format = modal_flow::PixelFormat::R8};
+        mgr_.add_camera(cam);
+      }
+
+      // Retrieve width and height
+      int width = cameras.at(0)->w();
+      int height = cameras.at(0)->h();
+
+      // Initialize OpenCL manager
+      cl_image_format fmt{};
+      fmt.image_channel_order = CL_R;
+      fmt.image_channel_data_type = CL_FLOAT;
+      for (int i = 0; i < cameras.size(); i++)
+      {
+        mgr.createTracker(i, width, height, pyr_levels, fmt);
+      }
+    }
 
     /**
      * @brief Process a new image
@@ -66,6 +95,13 @@ class TrackOCL : public TrackBase {
     void feed_monocular(const CameraData &message, size_t msg_id);
 
     /**
+     * @brief Process a new monocular image
+     * @param message Contains our timestamp, images, and camera ids
+     * @param msg_id the camera index in message data vector
+     */
+    void feed_batch_monocular(const CameraData &message);
+
+    /**
      * @brief Detects new features in the current image
      * @param img0pyr image we will detect features on (first level of pyramid)
      * @param mask0 mask which has what ROI we do not want features in
@@ -76,9 +112,24 @@ class TrackOCL : public TrackBase {
      * Will try to always have the "max_features" being tracked through KLT at each timestep.
      * Passed images should already be grayscaled.
      */
+
+    std::vector<std::pair<int, int>> get_grids_to_fill(int width, int height,
+                                                       const cv::Mat &mask0,
+                                                       cv::Mat &mask0_updated, // used for detection
+                                                       cv::Mat &grid_2d_close,
+                                                       std::vector<cv::KeyPoint> &pts0,
+                                                       std::vector<size_t> &ids0);
+
+    void process_batch_detection_result(int width, int height, int cam_id,
+                                        const cv::Mat &detection_mask,
+                                        cv::Mat grid_2d_close,
+                                        std::vector<std::pair<int, int>> valid_locs,
+                                        modal_flow::DetectResult detect_res,
+                                        std::vector<cv::KeyPoint> &pts0,
+                                        std::vector<size_t> &ids0);
+
     void perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
                                      std::vector<size_t> &ids0, int id);
-                                     
 
     /**
      * @brief KLT track between two images, and do RANSAC afterwards
@@ -97,6 +148,8 @@ class TrackOCL : public TrackBase {
     void perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &pts0,
                           std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out);
 
+    void perform_batch_matching();
+
     // Parameters for our FAST grid detector
     int threshold;
     int grid_x;
@@ -113,10 +166,13 @@ class TrackOCL : public TrackBase {
     std::map<size_t, std::vector<cv::Mat>> img_pyramid_last;
     std::map<size_t, cv::Mat> img_curr;
     std::map<size_t, std::vector<cv::Mat>> img_pyramid_curr;
-  
-private:
-    VoxlOCLManager& mgr;
-};
+
+  private:
+    VoxlOCLManager &mgr;
+
+    modal_flow::ocl::OclDevice &dev_;
+    modal_flow::ocl::ManagerCL mgr_;
+  };
 
 } // namespace ov_core
 
