@@ -34,7 +34,7 @@
 
 using namespace ov_core;
 
-int test_feed_all = 1;
+int test_feed_all = 0;
 
 void TrackOCL::feed_new_camera(const CameraData &message)
 {
@@ -87,14 +87,14 @@ void TrackOCL::feed_new_camera(const CameraData &message)
         // If we are doing binocular tracking, then we should parallize our tracking
         if (num_images == 1)
         {
-            feed_monocular(message, 0);
+            feed_monocular_use_flow(message, 0);
         }
         else if (!use_stereo)
         {
             // NOTE: opencv::parallel_for() seems to be less efficient than direct loop
             for (int i = 0; i < (int)num_images; i++)
             {
-                feed_monocular(message, i);
+                feed_monocular_use_flow(message, i);
             }
         }
         else
@@ -107,6 +107,7 @@ void TrackOCL::feed_new_camera(const CameraData &message)
 
 void TrackOCL::feed_batch_monocular(const CameraData &message)
 {
+    /*
     // initial check
     size_t N = message.images.size();
 
@@ -120,7 +121,7 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
         std::pair<int, int> dims = mgr_.get_cam_dim(cam_id);
 
         message.images[msg_id].convertTo(float_img[msg_id], CV_32F);
-
+        
         modal_flow::ImageView iv{{std::get<0>(dims), std::get<1>(dims),
                                   modal_flow::PixelFormat::R32F, float_img[msg_id].step},
                                  float_img[msg_id].data,
@@ -131,7 +132,7 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
     }
 
     mgr_.build_next_img_pyramids(pyr_batch);
-
+    
     std::vector<int> to_track(N, 0);
     std::vector<int> to_detect(N, 0); // holds 1 if action is to be taken, 0 otherwise
 
@@ -141,35 +142,44 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
 
     modal_flow::DetectionBatch detect_batch;
     detect_batch.options = dopt;
-
+    
     std::vector<cv::Mat> grid_2d_close(N);
     std::vector<cv::Mat> detection_mask(N);                      // holds msg_id's detection mask
     std::vector<std::vector<std::pair<int, int>>> valid_locs(N); // holds msg_id's detection grid cells
-
+    
     for (size_t msg_id = 0; msg_id < N; msg_id++)
     {
         size_t cam_id = message.sensor_ids[msg_id];
         std::lock_guard<std::mutex> lck(mtx_feeds[cam_id]);
-
+        
         cv::Mat mask = message.masks.at(msg_id);
         cv::Mat img = message.images[msg_id];
 
         // If has prior points, do tracking
         to_track[msg_id] = !pts_last[cam_id].empty() ? 1 : 0;
-
+        
         std::pair<int, int> dims = mgr_.get_cam_dim(cam_id);
 
         auto pts_left_old = pts_last[cam_id];
         auto ids_left_old = ids_last[cam_id];
-
+        
         // check if any grid cells need to be refilled
         valid_locs[msg_id] = get_grids_to_fill(std::get<0>(dims), std::get<1>(dims), mask, detection_mask[msg_id], grid_2d_close[msg_id], pts_left_old, ids_left_old);
 
+        if (pts_last[cam_id].empty())
+            img_last[cam_id] = message.images[msg_id];
+
         // if we need to find points, add the frame to the detection batch
-        printf("cam_id: %d, pts: %d, valid_locs: %d\n", cam_id, pts_left_old.size(), valid_locs[msg_id].size());
         if (!valid_locs[msg_id].empty())
         {
-            modal_flow::ImageView iv{{std::get<0>(dims), std::get<1>(dims), modal_flow::PixelFormat::R8, img.step}, img.data, modal_flow::ExternalType::None, 0};
+            modal_flow::ImageView iv;
+            if (pts_left_old.empty())
+                iv = modal_flow::ImageView({{std::get<0>(dims), std::get<1>(dims), modal_flow::PixelFormat::R8, img.step}, img.data, modal_flow::ExternalType::None, 0});
+            else
+            {
+                iv = modal_flow::ImageView({{std::get<0>(dims), std::get<1>(dims), modal_flow::PixelFormat::R8, img_last[cam_id].step}, img_last[cam_id].data, modal_flow::ExternalType::None, 0});
+            }
+
             modal_flow::Frame f({cam_id, 0, iv});
             detect_batch.frames.push_back(f);
             to_detect[msg_id] = 1;
@@ -182,13 +192,13 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
 
     // run the detection
     auto results = mgr_.run_detection(detect_batch);
-
+    
     // process the detection results, and setup the tracking batch
     int job_idx = 0;
     for (size_t msg_id = 0; msg_id < N; msg_id++)
     {
         if (!to_detect[msg_id])
-            continue;
+        continue;
 
         size_t cam_id = message.sensor_ids[msg_id];
         std::pair<int, int> dims = mgr_.get_cam_dim(cam_id);
@@ -204,12 +214,11 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
 
         // if (pts_last[cam_id].empty())
         // {
-        pts_last[cam_id] = pts_left_old;
-        ids_last[cam_id] = ids_left_old;
-        // printf("cam: %d, pts_last adding: %d\n", cam_id, pts_left_old.size());
+            pts_last[cam_id] = pts_left_old;
+            ids_last[cam_id] = ids_left_old;
+            // printf("cam: %d, pts_last adding: %d\n", cam_id, pts_left_old.size());
         // }
     }
-    printf("processed detection results\n");
 
     std::vector<std::vector<uchar>> mask_ll(N);
     std::vector<std::vector<cv::KeyPoint>> pts_left_new(N);
@@ -226,16 +235,13 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
     modal_flow::TrackingBatch track_batch;
     modal_flow::TrackOptions topt;
 
-    printf("making tracking batch\n");
-
     job_idx = 0;
     for (size_t msg_id = 0; msg_id < N; msg_id++)
     {
-        printf("msg_id: %d, to_track: %d\n", msg_id, to_track[msg_id]);
         if (!to_track[msg_id])
             continue;
-
-        size_t cam_id = message.sensor_ids[msg_id];
+            
+            size_t cam_id = message.sensor_ids[msg_id];
 
         std::pair<int, int> dims = mgr_.get_cam_dim(cam_id);
 
@@ -248,39 +254,32 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
             }
             too_few_pts[msg_id] = 1;
             to_track[msg_id] = 0;
-            printf("cam_id: %d had too few pts: %d\n", cam_id, pts_last[cam_id].size());
             continue;
         }
-
+        
         modal_flow::TrackInput track_in;
         for (const auto &point : pts_last[cam_id])
         {
             track_in.prev_points.push_back({point.pt.x, point.pt.y, 0.f});
         }
         modal_flow::ImageView iv{{std::get<0>(dims), std::get<1>(dims),
-                                  modal_flow::PixelFormat::R32F, float_img[msg_id].step},
+        modal_flow::PixelFormat::R32F, float_img[msg_id].step},
                                  float_img[msg_id].data,
                                  modal_flow::ExternalType::None,
                                  0};
-        modal_flow::Frame f({cam_id, 0, iv});
-        track_in.next_frame = f;
+                                 modal_flow::Frame f({cam_id, 0, iv});
+                                 track_in.next_frame = f;
         track_batch.jobs.push_back(track_in);
-        printf("pushing back batch, for msg: %d\n", msg_id);
     }
-    printf("track_batch size: %d\n", track_batch.jobs.size());
-
-    printf("running tracking\n");
 
     std::vector<modal_flow::TrackResult> track_results = mgr_.run_tracking(track_batch);
-
-    printf("tracking ran\n");
 
     job_idx = 0;
     for (int i = 0; i < N; i++)
     {
         printf("msg_id: %d, to_track: %d\n", i, to_track[i]);
         if (to_track[i])
-            printf("msg_id: %d, tracked count: %d\n", i, track_results[job_idx++].next_points.size());
+        printf("msg_id: %d, tracked count: %d\n", i, track_results[job_idx++].next_points.size());
     }
 
     job_idx = 0;
@@ -288,8 +287,6 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
     {
         if (!to_track[msg_id])
             continue;
-
-        printf("should see a good points left print\n");
 
         size_t cam_id = message.sensor_ids[msg_id];
         cv::Mat img_mask = message.masks.at(msg_id);
@@ -310,14 +307,10 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
             std::vector<cv::Point2f> pts0(n_pts), pts1(n_pts);
             for (int p = 0; p < n_pts; p++)
             {
-                printf("p: %d, (%.3f, %.3f) -> (%.3f, %.3f)\n", p, track_batch.jobs[job_idx].prev_points[p].x,
-                       track_batch.jobs[job_idx].prev_points[p].y,
-                       trk.next_points[p].x,
-                       trk.next_points[p].y);
-                    cv::Point2f pt0 = {track_batch.jobs[job_idx].prev_points[p].x,
-                                       track_batch.jobs[job_idx].prev_points[p].y};
+                cv::Point2f pt0 = {track_batch.jobs[job_idx].prev_points[p].x,
+                                   track_batch.jobs[job_idx].prev_points[p].y};
                 cv::Point2f pt1 = {trk.next_points[p].x,
-                                   trk.next_points[p].y};
+                trk.next_points[p].y};
                 pts0[p] = pt0;
                 pts1[p] = pt1;
             }
@@ -329,13 +322,13 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
                 u0.push_back(camera_calib.at(cam_id)->undistort_cv(pts0[p]));
                 u1.push_back(camera_calib.at(cam_id)->undistort_cv(pts1[p]));
             }
-
+            
             std::vector<uchar> mask_ransac;
             double max_focallength_img0 = std::max(camera_calib.at(cam_id)->get_K()(0, 0), camera_calib.at(cam_id)->get_K()(1, 1));
             double max_focallength_img1 = std::max(camera_calib.at(cam_id)->get_K()(0, 0), camera_calib.at(cam_id)->get_K()(1, 1));
             double max_focallength = std::max(max_focallength_img0, max_focallength_img1);
             cv::findFundamentalMat(u0, u1, cv::FM_RANSAC, 2.0 / max_focallength, 0.999, mask_ransac);
-
+            
             mask.resize(n_pts);
             for (size_t p = 0; p < n_pts; ++p)
             {
@@ -355,7 +348,9 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
         if (mask.empty())
         {
             std::lock_guard<std::mutex> lckv(mtx_last_vars);
-            // img_last[cam_id] = img;
+            // img_last[cam_id] =
+            img_last[cam_id] = message.images[msg_id];
+            // printf("cam_id: %zu img_last stride: %zu\n")
             // img_pyramid_last[cam_id] = imgpyr;
             img_mask_last[cam_id] = img_mask;
             pts_last[cam_id].clear();
@@ -378,26 +373,27 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
             // NOTE: mask has max value of 255 (white) if it should be
             if ((int)message.masks.at(msg_id).at<uint8_t>((int)pts_left_new[msg_id].at(p).pt.y, (int)pts_left_new[msg_id].at(p).pt.x) > 127)
                 continue;
-            // If it is a good track, and also tracked from left to right
-            if (mask[p])
-            {
+                // If it is a good track, and also tracked from left to right
+                if (mask[p])
+                {
                 good_left.push_back(pts_left_new[msg_id][p]);
                 good_ids_left.push_back(ids_left_old[p]);
             }
         }
-
+        
         // Update our feature database, with theses new observations
         for (size_t p = 0; p < good_left.size(); p++)
         {
             cv::Point2f npt_l = camera_calib.at(cam_id)->undistort_cv(good_left.at(p).pt);
             database->update_feature(good_ids_left.at(p), message.timestamp, cam_id, good_left.at(p).pt.x, good_left.at(p).pt.y, npt_l.x,
-                                     npt_l.y);
+            npt_l.y);
         }
 
         // Move forward in time
         {
             std::lock_guard<std::mutex> lckv(mtx_last_vars);
-            // img_last[cam_id] = img;
+            img_last[cam_id] = message.images[msg_id].clone();
+            printf("cam_id: %zu img last stride: %d, cur_img stride; %d\n", cam_id, img_last[cam_id].step, message.images[msg_id].step);
             // img_pyramid_last[cam_id] = imgpyr;
             img_mask_last[cam_id] = img_mask;
             printf("good points left; %d\n", good_left.size());
@@ -405,6 +401,140 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
             ids_last[cam_id] = good_ids_left;
         }
     }
+    */
+}
+
+void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
+{
+    // Lock this data feed for this camera
+    size_t cam_id = message.sensor_ids.at(msg_id);
+    std::lock_guard<std::mutex> lck(mtx_feeds.at(cam_id));
+
+    // Get our image objects for this image
+    cv::Mat img = img_curr.at(cam_id);
+    std::vector<cv::Mat> imgpyr = img_pyramid_curr.at(cam_id);
+    cv::Mat mask = message.masks.at(msg_id);
+    rT2 = boost::posix_time::microsec_clock::local_time();
+
+    std::pair<int, int> dims = mgr_.get_cam_dim(cam_id);
+    int cam_width  = std::get<0>(dims);
+    int cam_height = std::get<1>(dims);
+
+    // printf("cam_id: %d, msg_id: %d\n", cam_id, msg_id);
+    // printf("message imgs: %d, frames: %d\n", message.images.size(), message.img_frames.size());
+    modal_flow::Frame frame = message.img_frames[msg_id];
+    
+    // printf("got frame with id: %d, w: %d, h; %d\n", frame.cam, frame.img.desc.width, frame.img.desc.height);
+
+    // upload image to flow manager
+    if (img_buf_next_[cam_id]) {
+        if (img_buf_prev_[cam_id]) {
+            mgr_.release_pyramid((modal_flow::CameraId)cam_id, img_buf_prev_[cam_id]);
+        }
+        img_buf_prev_[cam_id] = img_buf_next_[cam_id];
+    }
+    img_buf_next_[cam_id] = mgr_.acquire_pyramid_buf((modal_flow::CameraId)cam_id);
+    mgr_.upload_frame_to_buf(frame, img_buf_next_[cam_id]);
+
+    // If we didn't have any successful tracks last time, just extract this time
+    // This also handles, the tracking initalization on the first call to this extractor
+    if (pts_last[cam_id].empty())
+    {
+        // Detect new features
+        std::vector<cv::KeyPoint> good_left;
+        std::vector<size_t> good_ids_left;
+        perform_detection_monocular(img_buf_next_[cam_id], imgpyr, mask, good_left, good_ids_left, cam_id);
+
+        // Save the current image and pyramid
+        std::lock_guard<std::mutex> lckv(mtx_last_vars);
+        img_last[cam_id] = img;
+        img_pyramid_last[cam_id] = imgpyr;
+        img_mask_last[cam_id] = mask;
+        pts_last[cam_id] = good_left;
+        ids_last[cam_id] = good_ids_left;
+
+        return;
+    }
+
+    // First we should make that the last images have enough features so we can do KLT
+    // This will "top-off" our number of tracks so always have a constant number
+    auto pts_left_old = pts_last[cam_id];
+    auto ids_left_old = ids_last[cam_id];
+
+    perform_detection_monocular(img_buf_prev_[cam_id], img_pyramid_last[cam_id], img_mask_last[cam_id], pts_left_old, ids_left_old, cam_id);
+    rT3 = boost::posix_time::microsec_clock::local_time();
+
+    // Our return success masks, and predicted new features
+    std::vector<uchar> mask_ll;
+    std::vector<cv::KeyPoint> pts_left_new = pts_left_old;
+
+    // Lets track temporally
+    perform_matching(img_pyramid_last[cam_id], imgpyr, pts_left_old, pts_left_new, cam_id, cam_id, mask_ll);
+    assert(pts_left_new.size() == ids_left_old.size());
+    rT4 = boost::posix_time::microsec_clock::local_time();
+
+    // If any of our mask is empty, that means we didn't have enough to do ransac, so just return
+    if (mask_ll.empty())
+    {
+        std::lock_guard<std::mutex> lckv(mtx_last_vars);
+        img_last[cam_id] = img;
+        img_pyramid_last[cam_id] = imgpyr;
+        img_mask_last[cam_id] = mask;
+        pts_last[cam_id].clear();
+        ids_last[cam_id].clear();
+        PRINT_ERROR(RED "[KLT-EXTRACTOR]: Failed to get enough points to do RANSAC, resetting.....\n" RESET);
+        return;
+    }
+
+    // Get our "good tracks"
+    std::vector<cv::KeyPoint> good_left;
+    std::vector<size_t> good_ids_left;
+
+    // Loop through all left points
+    for (size_t i = 0; i < pts_left_new.size(); i++)
+    {
+        // Ensure we do not have any bad KLT tracks (i.e., points are negative)
+        if (pts_left_new.at(i).pt.x < 0 || pts_left_new.at(i).pt.y < 0 || (int)pts_left_new.at(i).pt.x >= cam_width ||
+            (int)pts_left_new.at(i).pt.y >= cam_height)
+            continue;
+        // Check if it is in the mask
+        // NOTE: mask has max value of 255 (white) if it should be
+        if ((int)message.masks.at(msg_id).at<uint8_t>((int)pts_left_new.at(i).pt.y, (int)pts_left_new.at(i).pt.x) > 127)
+            continue;
+        // If it is a good track, and also tracked from left to right
+        if (mask_ll[i])
+        {
+            good_left.push_back(pts_left_new[i]);
+            good_ids_left.push_back(ids_left_old[i]);
+        }
+    }
+
+    // Update our feature database, with theses new observations
+    for (size_t i = 0; i < good_left.size(); i++)
+    {
+        cv::Point2f npt_l = camera_calib.at(cam_id)->undistort_cv(good_left.at(i).pt);
+        database->update_feature(good_ids_left.at(i), message.timestamp, cam_id, good_left.at(i).pt.x, good_left.at(i).pt.y, npt_l.x,
+                                 npt_l.y);
+    }
+
+    // Move forward in time
+    {
+        std::lock_guard<std::mutex> lckv(mtx_last_vars);
+        img_last[cam_id] = img;
+        img_pyramid_last[cam_id] = imgpyr;
+        img_mask_last[cam_id] = mask;
+        pts_last[cam_id] = good_left;
+        ids_last[cam_id] = good_ids_left;
+    }
+    rT5 = boost::posix_time::microsec_clock::local_time();
+
+    //  // Timing information
+    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for pyramid\n", (rT2 - rT1).total_microseconds() * 1e-6);
+    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for detection\n", (rT3 - rT2).total_microseconds() * 1e-6);
+    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for temporal klt\n", (rT4 - rT3).total_microseconds() * 1e-6);
+    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for feature DB update (%d features)\n", (rT5 - rT4).total_microseconds() * 1e-6,
+                (int)good_left.size());
+    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for total\n", (rT5 - rT1).total_microseconds() * 1e-6);
 }
 
 void TrackOCL::feed_monocular(const CameraData &message, size_t msg_id)
@@ -419,6 +549,8 @@ void TrackOCL::feed_monocular(const CameraData &message, size_t msg_id)
     cv::Mat mask = message.masks.at(msg_id);
     rT2 = boost::posix_time::microsec_clock::local_time();
 
+    modal_flow::BufferId buf_id = 0;
+
     // If we didn't have any successful tracks last time, just extract this time
     // This also handles, the tracking initalization on the first call to this extractor
     if (pts_last[cam_id].empty())
@@ -426,7 +558,7 @@ void TrackOCL::feed_monocular(const CameraData &message, size_t msg_id)
         // Detect new features
         std::vector<cv::KeyPoint> good_left;
         std::vector<size_t> good_ids_left;
-        perform_detection_monocular(imgpyr, mask, good_left, good_ids_left, cam_id);
+        perform_detection_monocular(buf_id, imgpyr, mask, good_left, good_ids_left, cam_id);
 
         // Save the current image and pyramid
         std::lock_guard<std::mutex> lckv(mtx_last_vars);
@@ -449,7 +581,7 @@ void TrackOCL::feed_monocular(const CameraData &message, size_t msg_id)
     // This will "top-off" our number of tracks so always have a constant number
     auto pts_left_old = pts_last[cam_id];
     auto ids_left_old = ids_last[cam_id];
-    perform_detection_monocular(img_pyramid_last[cam_id], img_mask_last[cam_id], pts_left_old, ids_left_old, cam_id);
+    perform_detection_monocular(buf_id, img_pyramid_last[cam_id], img_mask_last[cam_id], pts_left_old, ids_left_old, cam_id);
     rT3 = boost::posix_time::microsec_clock::local_time();
 
     mgr.getTracker(cam_id)->swapPyramids();
@@ -752,7 +884,7 @@ void TrackOCL::process_batch_detection_result(int width, int height, int cam_id,
     };
 }
 
-void TrackOCL::perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, const cv::Mat &mask0,
+void TrackOCL::perform_detection_monocular(modal_flow::BufferId& buf_id, const std::vector<cv::Mat> &img0pyr, const cv::Mat &mask0,
                                            std::vector<cv::KeyPoint> &pts0,
                                            std::vector<size_t> &ids0, int cam_id)
 {
@@ -762,12 +894,15 @@ void TrackOCL::perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, 
     // This means that we will reject points that less than grid_px_size points away then existing features
 
     auto rT1 = boost::posix_time::microsec_clock::local_time();
+    // printf("mask dims: %d x %d\n", mask0.cols, mask0.rows);
+    int img_width  = mask0.cols;
+    int img_height = mask0.rows;
 
-    cv::Size size_close((int)((float)img0pyr.at(0).cols / (float)min_px_dist),
-                        (int)((float)img0pyr.at(0).rows / (float)min_px_dist)); // width x height
+    cv::Size size_close((int)((float)img_width  / (float)min_px_dist),
+                        (int)((float)img_height / (float)min_px_dist)); // width x height
     cv::Mat grid_2d_close = cv::Mat::zeros(size_close, CV_8UC1);
-    float size_x = (float)img0pyr.at(0).cols / (float)grid_x;
-    float size_y = (float)img0pyr.at(0).rows / (float)grid_y;
+    float size_x = (float)img_width  / (float)grid_x;
+    float size_y = (float)img_height / (float)grid_y;
     cv::Size size_grid(grid_x, grid_y); // width x height
     cv::Mat grid_2d_grid = cv::Mat::zeros(size_grid, CV_8UC1);
     cv::Mat mask0_updated = mask0.clone();
@@ -780,7 +915,7 @@ void TrackOCL::perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, 
         int x = (int)kpt.pt.x;
         int y = (int)kpt.pt.y;
         int edge = 10;
-        if (x < edge || x >= img0pyr.at(0).cols - edge || y < edge || y >= img0pyr.at(0).rows - edge)
+        if (x < edge || x >= img_width - edge || y < edge || y >= img_height - edge)
         {
             it0 = pts0.erase(it0);
             it1 = ids0.erase(it1);
@@ -826,7 +961,7 @@ void TrackOCL::perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, 
             grid_2d_grid.at<uint8_t>(y_grid, x_grid) += 1;
         }
         // Append this to the local mask of the image
-        if (x - min_px_dist >= 0 && x + min_px_dist < img0pyr.at(0).cols && y - min_px_dist >= 0 && y + min_px_dist < img0pyr.at(0).rows)
+        if (x - min_px_dist >= 0 && x + min_px_dist < img_width && y - min_px_dist >= 0 && y + min_px_dist < img_height)
         {
             cv::Point pt1(x - min_px_dist, y - min_px_dist);
             cv::Point pt2(x + min_px_dist, y + min_px_dist);
@@ -865,12 +1000,19 @@ void TrackOCL::perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, 
         }
     }
     std::vector<cv::KeyPoint> pts0_ext;
-    Grider_OCL::perform_griding(mgr.getTracker(cam_id), img0pyr.at(0), mask0_updated, valid_locs, pts0_ext, num_features, grid_x, grid_y, threshold, true);
+    int grid_flow = 1;
+    if (grid_flow) {
+        // printf("using grid flow, (%dx%d) valid_locs: %d\n", img_width, img_height, valid_locs.size());
+        Grider_OCL::perform_griding_use_flow(mgr_, cam_id, buf_id, mask0_updated, valid_locs, pts0_ext, num_features, grid_x, grid_y, threshold, true);
+    } else {
+        Grider_OCL::perform_griding(mgr.getTracker(cam_id), img0pyr.at(0), mask0_updated, valid_locs, pts0_ext, num_features, grid_x, grid_y, threshold, true);
+    }
+    // printf("pts0_ext: %d\n", pts0_ext.size());
 
     auto rT3 = boost::posix_time::microsec_clock::local_time();
     PRINT_DEBUG("[TIME-DTCT]: %.4f seconds for grid detection\n", (rT3 - rT2).total_microseconds() * 1e-6);
 
-    // Now, reject features that are close a current feature
+    // Now, reject features that are close to a current feature
     std::vector<cv::KeyPoint> kpts0_new;
     std::vector<cv::Point2f> pts0_new;
     for (auto &kpt : pts0_ext)
@@ -921,11 +1063,18 @@ void TrackOCL::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::
 
     // Convert keypoints into points (stupid opencv stuff)
     std::vector<cv::Point2f> pts0, pts1;
+    std::vector<modal_flow::Keypoint> pts_in;
     std::vector<float> pts_out;
     for (size_t i = 0; i < kpts0.size(); i++)
     {
         pts0.push_back(kpts0.at(i).pt);
         pts1.push_back(kpts1.at(i).pt);
+
+        modal_flow::Keypoint kp;
+        kp.x = kpts0.at(i).pt.x;
+        kp.y = kpts0.at(i).pt.y;
+        kp.score = 0.f;
+        pts_in.push_back(kp);
 
         // for gpu run
         pts_out.push_back(kpts0.at(i).pt.x);
@@ -941,8 +1090,41 @@ void TrackOCL::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::
         return;
     }
 
-    // Now do KLT tracking to get the valid new points
     std::vector<uchar> mask_klt;
+
+    int use_flow = 1;
+    if (use_flow)
+    {
+        modal_flow::TrackingBatch track_batch;
+        modal_flow::TrackOptions topt;
+
+        size_t cam_id = id0;
+        std::pair<int, int> dims = mgr_.get_cam_dim(cam_id);
+
+        std::vector<modal_flow::TrackInput> track_in(1);
+        track_in[0].cam_id = id0;
+        track_in[0].prev_img_buf = img_buf_prev_[id0];
+        track_in[0].next_img_buf = img_buf_next_[id0];
+        track_in[0].prev_points = pts_in;
+
+        auto res = mgr_.track_many(track_in);
+
+        int n_points = res[0].next_points.size();
+        
+        mask_klt.resize(n_points);
+        for (int i = 0; i < n_points; i++)
+        {
+            modal_flow::Keypoint point = res[0].next_points[i];
+
+            cv::Point2f pt = (cv::Point2f){point.x, point.y};
+            pts1[i] = pt;
+    
+            mask_klt[i] = res[0].status[i];
+        }
+    }
+    else
+    {
+    // Now do KLT tracking to get the valid new points
     std::vector<float> error;
 
     int n_points = pts0.size();
@@ -962,6 +1144,8 @@ void TrackOCL::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::
         cv::Point2f pt = (cv::Point2f){tracked_pts[i * 2], tracked_pts[i * 2 + 1]};
         pts1[i] = pt;
     }
+    }
+
 
     // Normalize these points, so we can then do ransac
     // We don't want to do ransac on distorted image uvs since the mapping is nonlinear

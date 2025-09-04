@@ -4,8 +4,8 @@
 #include "../TrackBase.h"
 #include "cam/CamBase.h"
 #include <modal_flow_ocl_manager.h>
-#include <ocl/OclDevice.hpp>
-#include <ocl/ManagerCL.hpp>
+#include <modal_flow/ocl/OclDevice.hpp>
+#include <modal_flow/ocl/ManagerCL.hpp>
 #include <modal_flow/Types.hpp>
 
 namespace ov_core
@@ -53,12 +53,15 @@ namespace ov_core
       // create and set tracker
       auto trk = std::make_unique<modal_flow::ocl::TrackerCL>(dev_);
       mgr_.set_tracker(std::move(trk));
+      int num_bufs = 4;
 
       for (auto const &[camId, camPtr] : cameras)
       {
+        printf("camID: %d\n", camId);
         //  assumes track input frames will be uint8_t grayscale
         modal_flow::Camera cam{.id = camId, .width = camPtr->w(), .height = camPtr->h(), .format = modal_flow::PixelFormat::R8};
-        mgr_.add_camera(cam);
+        mgr_.add_camera(cam, num_bufs);
+        printf("added camera with id: %d\n", cam.id);
       }
 
       // Retrieve width and height
@@ -128,7 +131,7 @@ namespace ov_core
                                         std::vector<cv::KeyPoint> &pts0,
                                         std::vector<size_t> &ids0);
 
-    void perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
+    void perform_detection_monocular(modal_flow::BufferId& buf_id, const std::vector<cv::Mat> &img0pyr, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
                                      std::vector<size_t> &ids0, int id);
 
     /**
@@ -149,6 +152,8 @@ namespace ov_core
                           std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out);
 
     void perform_batch_matching();
+
+    void feed_monocular_use_flow(const CameraData &message, size_t msg_id);
 
     // Parameters for our FAST grid detector
     int threshold;
@@ -172,6 +177,9 @@ namespace ov_core
 
     modal_flow::ocl::OclDevice &dev_;
     modal_flow::ocl::ManagerCL mgr_;
+
+    std::map<size_t, modal_flow::BufferId> img_buf_prev_;
+    std::map<size_t, modal_flow::BufferId> img_buf_next_;
   };
 
 } // namespace ov_core
