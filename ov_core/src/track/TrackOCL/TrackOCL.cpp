@@ -403,6 +403,17 @@ void TrackOCL::feed_batch_monocular(const CameraData &message)
     }
     */
 }
+ 
+static int64_t _apps_time_monotonic_ns()
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts))
+    {
+        fprintf(stderr, "ERROR calling clock_gettime\n");
+        return -1;
+    }
+    return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
 
 void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
 {
@@ -414,8 +425,7 @@ void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
     cv::Mat img = img_curr.at(cam_id);
     std::vector<cv::Mat> imgpyr = img_pyramid_curr.at(cam_id);
     cv::Mat mask = message.masks.at(msg_id);
-    rT2 = boost::posix_time::microsec_clock::local_time();
-
+    
     std::pair<int, int> dims = mgr_.get_cam_dim(cam_id);
     int cam_width  = std::get<0>(dims);
     int cam_height = std::get<1>(dims);
@@ -423,8 +433,8 @@ void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
     // printf("cam_id: %d, msg_id: %d\n", cam_id, msg_id);
     // printf("message imgs: %d, frames: %d\n", message.images.size(), message.img_frames.size());
     modal_flow::Frame frame = message.img_frames[msg_id];
-    
-    // printf("got frame with id: %d, w: %d, h; %d\n", frame.cam, frame.img.desc.width, frame.img.desc.height);
+
+    int64_t t1 = _apps_time_monotonic_ns();
 
     // upload image to flow manager
     if (img_buf_next_[cam_id]) {
@@ -435,7 +445,9 @@ void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
     }
     img_buf_next_[cam_id] = mgr_.acquire_pyramid_buf((modal_flow::CameraId)cam_id);
     mgr_.upload_frame_to_buf(frame, img_buf_next_[cam_id]);
-
+    
+    rT2 = boost::posix_time::microsec_clock::local_time();
+    int64_t t2 = _apps_time_monotonic_ns();
     // If we didn't have any successful tracks last time, just extract this time
     // This also handles, the tracking initalization on the first call to this extractor
     if (pts_last[cam_id].empty())
@@ -463,6 +475,7 @@ void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
 
     perform_detection_monocular(img_buf_prev_[cam_id], img_pyramid_last[cam_id], img_mask_last[cam_id], pts_left_old, ids_left_old, cam_id);
     rT3 = boost::posix_time::microsec_clock::local_time();
+    int64_t t3 = _apps_time_monotonic_ns();
 
     // Our return success masks, and predicted new features
     std::vector<uchar> mask_ll;
@@ -471,6 +484,7 @@ void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
     // Lets track temporally
     perform_matching(img_pyramid_last[cam_id], imgpyr, pts_left_old, pts_left_new, cam_id, cam_id, mask_ll);
     assert(pts_left_new.size() == ids_left_old.size());
+    int64_t t4 = _apps_time_monotonic_ns();
     rT4 = boost::posix_time::microsec_clock::local_time();
 
     // If any of our mask is empty, that means we didn't have enough to do ransac, so just return
@@ -489,6 +503,7 @@ void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
     // Get our "good tracks"
     std::vector<cv::KeyPoint> good_left;
     std::vector<size_t> good_ids_left;
+    // printf("cam_id: %d, pts tracked: %zu\n", cam_id, pts_left_new.size());
 
     // Loop through all left points
     for (size_t i = 0; i < pts_left_new.size(); i++)
@@ -508,6 +523,7 @@ void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
             good_ids_left.push_back(ids_left_old[i]);
         }
     }
+    // printf("cam_id: %d, good tracks: %zu\n", cam_id, good_left.size());
 
     // Update our feature database, with theses new observations
     for (size_t i = 0; i < good_left.size(); i++)
@@ -526,15 +542,18 @@ void TrackOCL::feed_monocular_use_flow(const CameraData &message, size_t msg_id)
         pts_last[cam_id] = good_left;
         ids_last[cam_id] = good_ids_left;
     }
+    int64_t t5 = _apps_time_monotonic_ns();
     rT5 = boost::posix_time::microsec_clock::local_time();
 
-    //  // Timing information
-    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for pyramid\n", (rT2 - rT1).total_microseconds() * 1e-6);
-    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for detection\n", (rT3 - rT2).total_microseconds() * 1e-6);
-    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for temporal klt\n", (rT4 - rT3).total_microseconds() * 1e-6);
-    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for feature DB update (%d features)\n", (rT5 - rT4).total_microseconds() * 1e-6,
-                (int)good_left.size());
-    PRINT_DEBUG("[TIME-KLT]: %.4f seconds for total\n", (rT5 - rT1).total_microseconds() * 1e-6);
+    // Timing prints in milliseconds
+    auto dt = [](int64_t a, int64_t b){ return double(b - a) / 1e6; };
+
+    // printf("[TIME-KLT]: %.3f ms for pyramid\n", dt(t1, t2));
+    // printf("[TIME-KLT]: %.3f ms for detection\n", dt(t2, t3));
+    // printf("[TIME-KLT]: %.3f ms for temporal klt\n", dt(t3, t4));
+    // printf("[TIME-KLT]: %.3f ms for feature DB update (%d features)\n",
+    //        dt(t4, t5), (int)good_left.size());
+    // printf("[TIME-KLT]: %.3f ms total\n", dt(t1, t5));
 }
 
 void TrackOCL::feed_monocular(const CameraData &message, size_t msg_id)
@@ -1091,83 +1110,100 @@ void TrackOCL::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::
     }
 
     std::vector<uchar> mask_klt;
+    int64_t t0 = _apps_time_monotonic_ns();
 
-    int use_flow = 1;
-    if (use_flow)
-    {
-        modal_flow::TrackingBatch track_batch;
-        modal_flow::TrackOptions topt;
+    modal_flow::TrackingBatch track_batch;
+    modal_flow::TrackOptions topt;
 
-        size_t cam_id = id0;
-        std::pair<int, int> dims = mgr_.get_cam_dim(cam_id);
+    size_t cam_id = id0;
+    std::pair<int, int> dims = mgr_.get_cam_dim(cam_id);
 
-        std::vector<modal_flow::TrackInput> track_in(1);
-        track_in[0].cam_id = id0;
-        track_in[0].prev_img_buf = img_buf_prev_[id0];
-        track_in[0].next_img_buf = img_buf_next_[id0];
-        track_in[0].prev_points = pts_in;
+    std::vector<modal_flow::TrackInput> track_in(1);
+    track_in[0].cam_id = id0;
+    track_in[0].prev_img_buf = img_buf_prev_[id0];
+    track_in[0].next_img_buf = img_buf_next_[id0];
+    track_in[0].prev_points = pts_in;
 
-        auto res = mgr_.track_many(track_in);
+    auto res = mgr_.track_many(track_in);
 
-        int n_points = res[0].next_points.size();
-        
-        mask_klt.resize(n_points);
-        for (int i = 0; i < n_points; i++)
-        {
-            modal_flow::Keypoint point = res[0].next_points[i];
+    int64_t t1 = _apps_time_monotonic_ns();
+    // printf("[TIME-KLT-INTERNAL]: run_track = %.3f ms\n", (t1 - t0) / 1e6);
 
-            cv::Point2f pt = (cv::Point2f){point.x, point.y};
-            pts1[i] = pt;
-    
-            mask_klt[i] = res[0].status[i];
-        }
-    }
-    else
-    {
-    // Now do KLT tracking to get the valid new points
-    std::vector<float> error;
-
-    int n_points = pts0.size();
-    mgr.getTracker(id0)->runTrackingStep(n_points, (float *)pts_out.data());
-
-    size_t buffer_size = n_points * sizeof(float) * 2;
-
-    std::vector<float> tracked_pts;
+    int n_points = res[0].next_points.size();
     mask_klt.resize(n_points);
-    error.resize(n_points);
-    tracked_pts.resize(n_points * 2);
-
-    mgr.getTracker(id0)->readResults(n_points, tracked_pts.data(), mask_klt.data(), error.data());
 
     for (int i = 0; i < n_points; i++)
     {
-        cv::Point2f pt = (cv::Point2f){tracked_pts[i * 2], tracked_pts[i * 2 + 1]};
-        pts1[i] = pt;
-    }
+        modal_flow::Keypoint point = res[0].next_points[i];
+        pts1[i] = (cv::Point2f){point.x, point.y};
+        mask_klt[i] = res[0].status[i];
     }
 
+    std::vector<cv::Point2f> pts0_keep, pts1_keep;
+    std::vector<int>         keep_idx;        // map back to original i
+
+    pts0_keep.reserve(pts0.size());
+    pts1_keep.reserve(pts1.size());
+    keep_idx.reserve(pts0.size());
+
+    for (size_t i = 0; i < pts0.size(); ++i) {
+        if (mask_klt[i]) {                    // only keep successfully tracked points
+            pts0_keep.push_back(pts0[i]);
+            pts1_keep.push_back(pts1[i]);
+            keep_idx.push_back((int)i);
+        }
+    }
 
     // Normalize these points, so we can then do ransac
     // We don't want to do ransac on distorted image uvs since the mapping is nonlinear
     std::vector<cv::Point2f> pts0_n, pts1_n;
-    for (size_t i = 0; i < pts0.size(); i++)
+    for (size_t i = 0; i < pts0_keep.size(); i++)
     {
-        pts0_n.push_back(camera_calib.at(id0)->undistort_cv(pts0.at(i)));
-        pts1_n.push_back(camera_calib.at(id1)->undistort_cv(pts1.at(i)));
+        pts0_n.push_back(camera_calib.at(id0)->undistort_cv(pts0_keep.at(i)));
+        pts1_n.push_back(camera_calib.at(id1)->undistort_cv(pts1_keep.at(i)));
     }
+    int64_t t2 = _apps_time_monotonic_ns();
+    // printf("[TIME-KLT-INTERNAL]: undistort = %.3f ms\n", (t2 - t1) / 1e6);
 
     // Do RANSAC outlier rejection (note since we normalized the max pixel error is now in the normalized cords)
     std::vector<uchar> mask_rsc;
     double max_focallength_img0 = std::max(camera_calib.at(id0)->get_K()(0, 0), camera_calib.at(id0)->get_K()(1, 1));
     double max_focallength_img1 = std::max(camera_calib.at(id1)->get_K()(0, 0), camera_calib.at(id1)->get_K()(1, 1));
     double max_focallength = std::max(max_focallength_img0, max_focallength_img1);
-    cv::findFundamentalMat(pts0_n, pts1_n, cv::FM_RANSAC, 2.0 / max_focallength, 0.999, mask_rsc);
+    cv::findFundamentalMat(pts0_n, pts1_n, cv::FM_RANSAC, 2.0 / max_focallength, 0.95, 50, mask_rsc);
+    // cv::findFundamentalMat(pts0_n, pts1_n, cv::FM_RANSAC, 2.0 / max_focallength, 0.999, mask_rsc);
+
+    // int inliers = 0, outliers = 0;
+    // for (auto m : mask_rsc) {
+    //     if (m) inliers++;
+    //     else   outliers++;
+    // }
+
+    // printf("[RANSAC] Inliers = %d, Outliers = %d, Total = %zu\n",
+    //     inliers, outliers, mask_rsc.size());
+
+    // printf("[RANSAC] Dumping %zu point pairs:\n", pts0_n.size());
+    // for (size_t i = 0; i < pts0_n.size(); i++) {
+    //     printf("  [%zu] (%.3f, %.3f) -> (%.3f, %.3f), status=%d\n",
+    //         i, pts0_n[i].x, pts0_n[i].y,
+    //         pts1_n[i].x, pts1_n[i].y,
+    //         mask_rsc[i]);
+    // }
+
+    int64_t t3 = _apps_time_monotonic_ns();
+    // printf("[TIME-KLT-INTERNAL]: perform_matching total = %6.3f ms,  RANSAC = %6.3f ms\n", (t3 - t0) / 1e6, (t3 - t2) / 1e6);
 
     // Loop through and record only ones that are valid
-    for (size_t i = 0; i < mask_klt.size(); i++)
-    {
-        auto mask = (uchar)((i < mask_klt.size() && mask_klt[i] && i < mask_rsc.size() && mask_rsc[i]) ? 1 : 0);
-        mask_out.push_back(mask);
+    // Expand compact RANSAC mask back to original indexing
+    mask_out.assign(pts0.size(), (uchar)0);
+
+    size_t M = std::min(mask_rsc.size(), keep_idx.size());
+    for (size_t j = 0; j < M; ++j) {
+        if (mask_rsc[j]) {
+            int i_orig = keep_idx[j];
+            // mask_klt[i_orig] is already true for kept points; AND for clarity
+            mask_out[i_orig] = (uchar)1;
+        }
     }
 
     // Copy back the updated positions
