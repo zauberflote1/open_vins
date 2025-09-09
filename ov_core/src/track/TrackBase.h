@@ -33,6 +33,8 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/opencv.hpp>
 
+#include <CL/cl.h>
+
 #include "utils/colors.h"
 #include "utils/print.h"
 #include "utils/sensor_data.h"
