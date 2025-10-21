@@ -37,7 +37,6 @@ namespace ov_core
           grid_x(gridx),
           grid_y(gridy),
           min_px_dist(minpxdist),
-          mgr(VoxlOCLManager::instance()),
           dev_(modal_flow::ocl::OclDevice::Instance()),
           mgr_(dev_)
     {
@@ -57,25 +56,14 @@ namespace ov_core
 
       for (auto const &[camId, camPtr] : cameras)
       {
-        printf("camID: %d\n", camId);
         //  assumes track input frames will be uint8_t grayscale
         modal_flow::Camera cam{.id = camId, .width = camPtr->w(), .height = camPtr->h(), .format = modal_flow::PixelFormat::R8};
         mgr_.add_camera(cam, num_bufs);
-        printf("added camera with id: %d\n", cam.id);
       }
 
       // Retrieve width and height
       int width = cameras.at(0)->w();
       int height = cameras.at(0)->h();
-
-      // Initialize OpenCL manager
-      cl_image_format fmt{};
-      fmt.image_channel_order = CL_R;
-      fmt.image_channel_data_type = CL_FLOAT;
-      for (int i = 0; i < cameras.size(); i++)
-      {
-        mgr.createTracker(i, width, height, pyr_levels, fmt);
-      }
     }
 
     /**
@@ -96,43 +84,24 @@ namespace ov_core
      * @param msg_id the camera index in message data vector
      */
     void feed_monocular(const CameraData &message, size_t msg_id);
-
+      
     /**
-     * @brief Process a new monocular image
+     * @brief Process new stereo pair of images
      * @param message Contains our timestamp, images, and camera ids
-     * @param msg_id the camera index in message data vector
+     * @param msg_id_left first image index in message data vector
+     * @param msg_id_right second image index in message data vector
      */
-    void feed_batch_monocular(const CameraData &message);
+    void feed_stereo(const CameraData &message, size_t msg_id_left, size_t msg_id_right);
 
-    /**
-     * @brief Detects new features in the current image
-     * @param img0pyr image we will detect features on (first level of pyramid)
-     * @param mask0 mask which has what ROI we do not want features in
-     * @param pts0 vector of currently extracted keypoints in this image
-     * @param ids0 vector of feature ids for each currently extracted keypoint
-     *
-     * Given an image and its currently extracted features, this will try to add new features if needed.
-     * Will try to always have the "max_features" being tracked through KLT at each timestep.
-     * Passed images should already be grayscaled.
-     */
 
-    std::vector<std::pair<int, int>> get_grids_to_fill(int width, int height,
-                                                       const cv::Mat &mask0,
-                                                       cv::Mat &mask0_updated, // used for detection
-                                                       cv::Mat &grid_2d_close,
-                                                       std::vector<cv::KeyPoint> &pts0,
-                                                       std::vector<size_t> &ids0);
-
-    void process_batch_detection_result(int width, int height, int cam_id,
-                                        const cv::Mat &detection_mask,
-                                        cv::Mat grid_2d_close,
-                                        std::vector<std::pair<int, int>> valid_locs,
-                                        modal_flow::DetectResult detect_res,
-                                        std::vector<cv::KeyPoint> &pts0,
-                                        std::vector<size_t> &ids0);
-
-    void perform_detection_monocular(modal_flow::BufferId& buf_id, const std::vector<cv::Mat> &img0pyr, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
+    void perform_detection_monocular(modal_flow::BufferId& buf_id, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
                                      std::vector<size_t> &ids0, int id);
+
+    void perform_detection_stereo(modal_flow::BufferId buf_id0, modal_flow::BufferId buf_id1, 
+                                  const cv::Mat &mask0, const cv::Mat &mask1,
+                                  size_t cam_id_left, size_t cam_id_right,
+                                  std::vector<cv::KeyPoint> &pts0, std::vector<cv::KeyPoint> &pts1,
+                                  std::vector<size_t> &ids0, std::vector<size_t> &ids1);
 
     /**
      * @brief KLT track between two images, and do RANSAC afterwards
@@ -148,12 +117,9 @@ namespace ov_core
      * The two point vectors will be of equal size, but the mask_out variable will specify which points are good or bad.
      * If the second vector is non-empty, it will be used as an initial guess of where the keypoints are in the second image.
      */
-    void perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &pts0,
-                          std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out);
-
-    void perform_batch_matching();
-
-    void feed_monocular_use_flow(const CameraData &message, size_t msg_id);
+    void perform_matching(modal_flow::BufferId buf0, modal_flow::BufferId buf1, 
+                          std::vector<cv::KeyPoint> &pts0, std::vector<cv::KeyPoint> &pts1,
+                          size_t id0, size_t id1, std::vector<uchar> &mask_out);
 
     // Parameters for our FAST grid detector
     int threshold;
@@ -173,7 +139,6 @@ namespace ov_core
     std::map<size_t, std::vector<cv::Mat>> img_pyramid_curr;
 
   private:
-    VoxlOCLManager &mgr;
 
     modal_flow::ocl::OclDevice &dev_;
     modal_flow::ocl::ManagerCL mgr_;
