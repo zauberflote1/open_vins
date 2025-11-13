@@ -195,6 +195,8 @@ public:
     return total_count;
   }
 
+  bool get_did_zupt_update() const { return did_zupt_update; }
+
 protected:
   /**
    * @brief Given a new set of camera images, this will track them.
