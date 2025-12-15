@@ -171,6 +171,36 @@ public:
   }
 
   /**
+   * @brief Check if the gravity vector is pointing in an acceptable direction.
+   *
+   * This function validates that the measured/estimated gravity direction is within
+   * an acceptable angle from the expected direction. This prevents initialization
+   * when the platform is upside down or severely tilted.
+   *
+   * @param gravity_inI Gravity vector in the IMU frame (should be approximately [0,0,-g] for upright)
+   * @param expected_gravity_dir Expected normalized gravity direction in IMU frame (default: [0,0,-1])
+   * @param max_angle_deg Maximum allowed angle deviation from expected direction in degrees (default: 45)
+   * @return True if gravity direction is acceptable, false otherwise
+   */
+  static bool check_gravity_direction(const Eigen::Vector3d &gravity_inI,
+                                      const Eigen::Vector3d &expected_gravity_dir = Eigen::Vector3d(0, 0, -1),
+                                      double max_angle_deg = 45.0) {
+    // Normalize the gravity vector
+    Eigen::Vector3d gravity_normalized = gravity_inI / gravity_inI.norm();
+    Eigen::Vector3d expected_normalized = expected_gravity_dir / expected_gravity_dir.norm();
+
+    // Compute the angle between the measured gravity and expected direction
+    double dot_product = gravity_normalized.dot(expected_normalized);
+    // Clamp to handle numerical errors
+    dot_product = std::max(-1.0, std::min(1.0, dot_product));
+    double angle_rad = std::acos(dot_product);
+    double angle_deg = angle_rad * 180.0 / M_PI;
+
+    // Check if within tolerance
+    return angle_deg <= max_angle_deg;
+  }
+
+  /**
    * @brief Compute coefficients for the constrained optimization quadratic problem.
    *
    * https://gist.github.com/goldbattle/3791cbb11bbf4f5feb3f049dad72bfdd

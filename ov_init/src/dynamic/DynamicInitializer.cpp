@@ -479,6 +479,18 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   }
   PRINT_INFO("[init-d]: gravity in I0 was %.3f,%.3f,%.3f and |g| = %.4f\n", gravity_inI0(0), gravity_inI0(1), gravity_inI0(2),
              gravity_inI0.norm());
+
+  // Check if gravity is pointing in an acceptable direction (prevents upside-down initialization)
+  // gravity_inI0 is the actual gravity vector, so it should point in -Z for an upright IMU
+  Eigen::Vector3d expected_gravity_dir(0, 0, -1); // Expected: gravity points in -Z direction in IMU frame
+  if (!InitializerHelper::check_gravity_direction(gravity_inI0, expected_gravity_dir, params.init_gravity_max_angle)) {
+    double angle_deg = std::acos(std::max(-1.0, std::min(1.0, (gravity_inI0.normalized()).dot(expected_gravity_dir.normalized())))) * 180.0 / M_PI;
+    PRINT_WARNING(YELLOW "[init-d]: gravity direction check failed! Angle from expected: %.1f deg (max: %.1f deg)\n" RESET,
+                  angle_deg, params.init_gravity_max_angle);
+    PRINT_WARNING(YELLOW "[init-d]: estimated gravity direction: [%.3f, %.3f, %.3f]\n" RESET,
+                  gravity_inI0(0) / gravity_inI0.norm(), gravity_inI0(1) / gravity_inI0.norm(), gravity_inI0(2) / gravity_inI0.norm());
+    return false;
+  }
   auto rT4 = boost::posix_time::microsec_clock::local_time();
 
   // ======================================================

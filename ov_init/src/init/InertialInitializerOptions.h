@@ -115,6 +115,10 @@ struct InertialInitializerOptions {
   /// Initial IMU accelerometer bias values for dynamic initialization (will be optimized)
   Eigen::Vector3d init_dyn_bias_a = Eigen::Vector3d::Zero();
 
+  /// Maximum allowed angle (degrees) between measured gravity and expected direction for initialization
+  /// This prevents initialization when the platform is upside down or severely tilted
+  double init_gravity_max_angle = 45.0;
+
   /**
    * @brief This function will load print out all initializer settings loaded.
    * This allows for visual checking that everything was loaded properly from ROS/CMD parsers.
@@ -146,6 +150,7 @@ struct InertialInitializerOptions {
       parser->parse_config("init_dyn_bias_a", bias_a);
       init_dyn_bias_g << bias_g.at(0), bias_g.at(1), bias_g.at(2);
       init_dyn_bias_a << bias_a.at(0), bias_a.at(1), bias_a.at(2);
+      parser->parse_config("init_gravity_max_angle", init_gravity_max_angle);
     }
     PRINT_DEBUG("  - init_window_time: %.2f\n", init_window_time);
     PRINT_DEBUG("  - init_imu_thresh: %.2f\n", init_imu_thresh);
@@ -187,6 +192,7 @@ struct InertialInitializerOptions {
     }
     PRINT_DEBUG("  - init_dyn_bias_g: %.2f, %.2f, %.2f\n", init_dyn_bias_g(0), init_dyn_bias_g(1), init_dyn_bias_g(2));
     PRINT_DEBUG("  - init_dyn_bias_a: %.2f, %.2f, %.2f\n", init_dyn_bias_a(0), init_dyn_bias_a(1), init_dyn_bias_a(2));
+    PRINT_DEBUG("  - init_gravity_max_angle: %.2f\n", init_gravity_max_angle);
   }
 
   // NOISE / CHI2 ============================

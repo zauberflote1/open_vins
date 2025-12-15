@@ -118,6 +118,19 @@ bool StaticInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarianc
     return false;
   }
 
+  // Check if gravity is pointing in an acceptable direction (prevents upside-down initialization)
+  // The accelerometer measures -gravity when stationary, so a_avg_2to1 should be approximately [0,0,+g] for upright
+  // This means the IMU's Z-axis points up (opposite to gravity direction)
+  Eigen::Vector3d expected_gravity_dir(0, 0, -1); // Expected: gravity points in -Z direction in IMU frame
+  if (!InitializerHelper::check_gravity_direction(a_avg_2to1, expected_gravity_dir, params.init_gravity_max_angle)) {
+    double angle_deg = std::acos(std::max(-1.0, std::min(1.0, (a_avg_2to1.normalized()).dot(expected_gravity_dir.normalized())))) * 180.0 / M_PI;
+    PRINT_WARNING(YELLOW "[init-s]: gravity direction check failed! Angle from expected: %.1f deg (max: %.1f deg)\n" RESET,
+                  angle_deg, params.init_gravity_max_angle);
+    PRINT_WARNING(YELLOW "[init-s]: measured gravity direction: [%.3f, %.3f, %.3f]\n" RESET,
+                  a_avg_2to1(0) / a_avg_2to1.norm(), a_avg_2to1(1) / a_avg_2to1.norm(), a_avg_2to1(2) / a_avg_2to1.norm());
+    return false;
+  }
+
   // Get rotation with z axis aligned with -g (z_in_G=0,0,1)
   Eigen::Vector3d z_axis = a_avg_2to1 / a_avg_2to1.norm();
   Eigen::Matrix3d Ro;
