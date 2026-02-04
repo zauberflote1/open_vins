@@ -27,7 +27,9 @@
 #include "track/TrackAruco.h"
 #include "track/TrackDescriptor.h"
 #include "track/TrackOCL/TrackOCL.h"
+#ifndef DISABLE_TRACK_KLT
 #include "track/TrackKLT.h"
+#endif
 #include "track/TrackSIM.h"
 #include "types/Landmark.h"
 #include "types/LandmarkRepresentation.h"
@@ -133,12 +135,17 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
   if (params.use_klt) {
     if (params.use_gpu) {
       trackFEATS = std::shared_ptr<TrackBase>(new TrackOCL(state->_cam_intrinsics_cameras, init_max_features,
-                                                          state->_options.max_aruco_features, 
+                                                          state->_options.max_aruco_features,
                                                           params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist));
     } else {
+#ifndef DISABLE_TRACK_KLT
       trackFEATS = std::shared_ptr<TrackBase>(new TrackKLT(state->_cam_intrinsics_cameras, init_max_features,
                                                           state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
                                                           params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist));
+#else
+      PRINT_ERROR(RED "[VioManager]: TrackKLT is disabled at compile time. Use GPU mode or TrackDescriptor.\n" RESET);
+      std::exit(EXIT_FAILURE);
+#endif
     }
   } else {
     trackFEATS = std::shared_ptr<TrackBase>(new TrackDescriptor(

@@ -26,6 +26,7 @@ include_directories(
         src
         ${EIGEN3_INCLUDE_DIR}
         ${Boost_INCLUDE_DIRS}
+        ${OpenCV_INCLUDE_DIRS}
         ${catkin_INCLUDE_DIRS}
 )
 
@@ -40,6 +41,13 @@ list(APPEND thirdparty_libraries
 # Make the core library
 ##################################################
 
+# Option to disable TrackKLT (requires opencv video module)
+option(DISABLE_TRACK_KLT "Disable TrackKLT to avoid opencv video module dependency" OFF)
+if (DISABLE_TRACK_KLT)
+    add_definitions(-DDISABLE_TRACK_KLT=1)
+    message(STATUS "TrackKLT DISABLED - using TrackOCL only")
+endif()
+
 list(APPEND LIBRARY_SOURCES
         src/dummy.cpp
         src/cpi/CpiV1.cpp
@@ -48,7 +56,6 @@ list(APPEND LIBRARY_SOURCES
         src/track/TrackBase.cpp
         src/track/TrackAruco.cpp
         src/track/TrackDescriptor.cpp
-        src/track/TrackKLT.cpp
         src/track/TrackSIM.cpp
         src/track/TrackOCL/TrackOCL.cpp
         src/types/Landmark.cpp
@@ -57,6 +64,10 @@ list(APPEND LIBRARY_SOURCES
         src/feat/FeatureInitializer.cpp
         src/utils/print.cpp
 )
+# Only include TrackKLT if not disabled
+if (NOT DISABLE_TRACK_KLT)
+    list(APPEND LIBRARY_SOURCES src/track/TrackKLT.cpp)
+endif()
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")
 add_library(ov_core_lib SHARED ${LIBRARY_SOURCES} ${LIBRARY_HEADERS})
 target_link_libraries(ov_core_lib ${thirdparty_libraries})
