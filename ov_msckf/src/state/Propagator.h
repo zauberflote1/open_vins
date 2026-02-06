@@ -47,8 +47,10 @@ public:
    * @brief Default constructor
    * @param noises imu noise characteristics (continuous time)
    * @param gravity_mag Global gravity magnitude of the system (normally 9.81)
+   * @param prop_window Time window (seconds) to keep IMU measurements beyond the oldest needed time
    */
-  Propagator(NoiseManager noises, double gravity_mag) : _noises(noises), cache_imu_valid(false) {
+  Propagator(NoiseManager noises, double gravity_mag, double prop_window = 0.10)
+      : _noises(noises), _prop_window(prop_window), cache_imu_valid(false) {
     _noises.sigma_w_2 = std::pow(_noises.sigma_w, 2);
     _noises.sigma_a_2 = std::pow(_noises.sigma_a, 2);
     _noises.sigma_wb_2 = std::pow(_noises.sigma_wb, 2);
@@ -70,7 +72,7 @@ public:
 
     // Clean old measurements
     // std::cout << "PROP: imu_data.size() " << imu_data.size() << std::endl;
-    clean_old_imu_measurements(oldest_time - 0.10);
+    clean_old_imu_measurements(oldest_time - _prop_window);
   }
 
   /**
@@ -440,6 +442,9 @@ protected:
 
   /// Container for the noise values
   NoiseManager _noises;
+
+  /// Time window (seconds) to keep IMU measurements beyond the oldest needed time
+  double _prop_window;
 
   /// Our history of IMU messages (time, angular, linear)
   std::vector<ov_core::ImuData> imu_data;

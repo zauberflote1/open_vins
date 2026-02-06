@@ -41,9 +41,9 @@ using namespace ov_msckf;
 
 UpdaterZeroVelocity::UpdaterZeroVelocity(UpdaterOptions &options, NoiseManager &noises, std::shared_ptr<ov_core::FeatureDatabase> db,
                                          std::shared_ptr<Propagator> prop, double gravity_mag, double zupt_max_velocity,
-                                         double zupt_noise_multiplier, double zupt_max_disparity)
+                                         double zupt_noise_multiplier, double zupt_max_disparity, double prop_window)
     : _options(options), _noises(noises), _db(db), _prop(prop), _zupt_max_velocity(zupt_max_velocity),
-      _zupt_noise_multiplier(zupt_noise_multiplier), _zupt_max_disparity(zupt_max_disparity) {
+      _zupt_noise_multiplier(zupt_noise_multiplier), _zupt_max_disparity(zupt_max_disparity), _prop_window(prop_window) {
 
   // Gravity
   _gravity << 0.0, 0.0, gravity_mag;
@@ -340,6 +340,6 @@ void UpdaterZeroVelocity::feed_imu_batch(const std::vector<ov_core::ImuData>& me
 
     // Clean old measurements if needed
     if (oldest_time != -1) {
-        clean_old_imu_measurements(oldest_time - 0.10);
+        clean_old_imu_measurements(oldest_time - _prop_window);
     }
 }

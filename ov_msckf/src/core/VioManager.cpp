@@ -160,7 +160,7 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
   }
 
   // Initialize our state propagator
-  propagator = std::make_shared<Propagator>(params.imu_noises, params.gravity_mag);
+  propagator = std::make_shared<Propagator>(params.imu_noises, params.gravity_mag, params.prop_window);
 
   // Our state initialize
   initializer = std::make_shared<ov_init::InertialInitializer>(params.init_options, trackFEATS->get_feature_database());
@@ -173,7 +173,7 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
   if (params.try_zupt) {
     updaterZUPT = std::make_shared<UpdaterZeroVelocity>(params.zupt_options, params.imu_noises, trackFEATS->get_feature_database(),
                                                         propagator, params.gravity_mag, params.zupt_max_velocity,
-                                                        params.zupt_noise_multiplier, params.zupt_max_disparity);
+                                                        params.zupt_noise_multiplier, params.zupt_max_disparity, params.zupt_prop_window);
   }
 }
 
@@ -186,8 +186,8 @@ void VioManager::feed_measurement_batch_imu(const std::vector<ov_core::ImuData>&
         oldest_time = -1;
     }
     if (!is_initialized_vio) {
-        oldest_time = messages.back().timestamp - params.init_options.init_window_time + 
-                     state->_calib_dt_CAMtoIMU->value()(0) - 0.10;
+        oldest_time = messages.back().timestamp - params.init_options.init_window_time +
+                     state->_calib_dt_CAMtoIMU->value()(0) - params.zupt_prop_window;
     }
 
     // Downsample if requested
@@ -228,7 +228,7 @@ void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
     oldest_time = -1;
   }
   if (!is_initialized_vio) {
-    oldest_time = message.timestamp - params.init_options.init_window_time + state->_calib_dt_CAMtoIMU->value()(0) - 0.10;
+    oldest_time = message.timestamp - params.init_options.init_window_time + state->_calib_dt_CAMtoIMU->value()(0) - params.zupt_prop_window;
   }
   propagator->feed_imu(message, oldest_time);
 
@@ -262,7 +262,7 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
     if (params.try_zupt) {
       updaterZUPT = std::make_shared<UpdaterZeroVelocity>(params.zupt_options, params.imu_noises, trackFEATS->get_feature_database(),
                                                           propagator, params.gravity_mag, params.zupt_max_velocity,
-                                                          params.zupt_noise_multiplier, params.zupt_max_disparity);
+                                                          params.zupt_noise_multiplier, params.zupt_max_disparity, params.zupt_prop_window);
     }
     PRINT_WARNING(RED "[SIM]: casting our tracker to a TrackSIM object!\n" RESET);
   }
@@ -281,8 +281,8 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
     }
     if (did_zupt_update) {
       assert(state->_timestamp == timestamp);
-      propagator->clean_old_imu_measurements(timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
-      updaterZUPT->clean_old_imu_measurements(timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
+      propagator->clean_old_imu_measurements(timestamp + state->_calib_dt_CAMtoIMU->value()(0) - params.prop_window);
+      updaterZUPT->clean_old_imu_measurements(timestamp + state->_calib_dt_CAMtoIMU->value()(0) - params.prop_window);
       propagator->invalidate_cache();
       // timelastupdate = timestamp;
       return;
@@ -355,8 +355,8 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
     }
     if (did_zupt_update) {
       assert(state->_timestamp == message.timestamp);
-      propagator->clean_old_imu_measurements(message.timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
-      updaterZUPT->clean_old_imu_measurements(message.timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
+      propagator->clean_old_imu_measurements(message.timestamp + state->_calib_dt_CAMtoIMU->value()(0) - params.prop_window);
+      updaterZUPT->clean_old_imu_measurements(message.timestamp + state->_calib_dt_CAMtoIMU->value()(0) - params.prop_window);
       propagator->invalidate_cache();
       // timelastupdate = message.timestamp;
       return;
