@@ -20,9 +20,17 @@ if (OV_BUILD_CALIB)
 	add_subdirectory(ov_zcalib)
 endif()
 
+option(OV_BUILD_ZSTUDIO "Install zstudio, the VINS inspection and calibration studio (no ROS required)" OFF)
+if (OV_BUILD_ZSTUDIO)
+    add_subdirectory(zstudio)
+endif()
+
 # Make subdirectory tests discoverable from the build root. Aggregate binaries
 # into one dependency graph so -j can compile independent test TUs concurrently.
-if (OV_CORE_BUILD_TESTS OR OV_INIT_BUILD_TESTS OR OV_INIT_BUILD_MINI_TESTS OR OV_MSCKF_BUILD_TESTS OR OV_ZCALIB_BUILD_TESTS)
+# The host OpenCL harness, when libmodal-flow's source is found, registers
+# test_trackocl_host (see cmake/ModalFlowHost.cmake).
+if (OV_CORE_BUILD_TESTS OR OV_INIT_BUILD_TESTS OR OV_INIT_BUILD_MINI_TESTS OR OV_MSCKF_BUILD_TESTS OR OV_ZCALIB_BUILD_TESTS
+    OR TARGET ov_modal_flow_host)
     enable_testing()
     if (NOT CMAKE_VERSION VERSION_LESS 3.7)
         add_custom_target(ov_host_tests)
