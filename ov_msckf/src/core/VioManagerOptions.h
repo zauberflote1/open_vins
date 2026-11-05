@@ -23,6 +23,7 @@
 #ifndef OV_MSCKF_VIOMANAGEROPTIONS_H
 #define OV_MSCKF_VIOMANAGEROPTIONS_H
 
+#include "utils/finite.h"
 #include <Eigen/Eigen>
 #include <iostream>
 #include <memory>
@@ -34,7 +35,7 @@
 // builds do not have it: gate on header presence, mirroring ov_core's optional-OpenCL handling
 // (TrackOCL is only compiled when OpenCL/modal_flow exist). All TUs in a given environment agree
 // on this macro, so the struct layout stays consistent within every build.
-#if defined(__has_include)
+#if !defined(OV_HAVE_MODAL_FLOW) && defined(__has_include)
 #if __has_include(<modal_flow/StereoMatcher.hpp>)
 #define OV_HAVE_MODAL_FLOW 1
 #endif
@@ -56,6 +57,7 @@
 #include "cam/CamRadtan.h"
 #include "feat/FeatureInitializerOptions.h"
 #include "track/TrackBase.h"
+#include "utils/FsLite.h"
 #include "utils/colors.h"
 #include "utils/opencv_yaml_parse.h"
 #include "utils/print.h"
@@ -79,6 +81,7 @@ struct VioManagerOptions {
   void print_and_load(const std::shared_ptr<ov_core::YamlParser> &parser = nullptr) {
     print_and_load_estimator(parser);
     print_and_load_trackers(parser);
+    resolve_camera_epoch_mode(parser);
     print_and_load_noise(parser);
 
     // needs to be called last
@@ -136,9 +139,6 @@ struct VioManagerOptions {
     if (parser != nullptr) {
       parser->parse_config("dt_slam_delay", dt_slam_delay);
       parser->parse_config("try_zupt", try_zupt);
-      parser->parse_config("epoch_mode", epoch_mode, false);
-      parser->parse_config("epoch_bind_factor", epoch_bind_factor, false);
-      parser->parse_config("epoch_bridge_bias_cols", epoch_bridge_bias_cols, false);
       parser->parse_config("async_ring_size", async_ring_size, false);
       parser->parse_config("async_guard", async_guard, false);
       parser->parse_config("async_stale_factor", async_stale_factor, false);
@@ -152,9 +152,6 @@ struct VioManagerOptions {
       parser->parse_config("record_timing_filepath", record_timing_filepath);
     }
     PRINT_DEBUG("  - dt_slam_delay: %.1f\n", dt_slam_delay);
-    PRINT_DEBUG("  - epoch_mode: %d\n", epoch_mode);
-    PRINT_DEBUG("  - epoch_bind_factor: %.2f\n", epoch_bind_factor);
-    PRINT_DEBUG("  - epoch_bridge_bias_cols: %d\n", epoch_bridge_bias_cols);
     PRINT_DEBUG("  - async_ring_size: %d\n", async_ring_size);
     PRINT_DEBUG("  - async_guard: %.4f\n", async_guard);
     PRINT_DEBUG("  - async_stale_factor: %.2f\n", async_stale_factor);
@@ -243,18 +240,47 @@ struct VioManagerOptions {
   /// Rotation from accelerometer to the "IMU" gyroscope frame frame
   Eigen::Matrix<double, 4, 1> q_GYROtoIMU;
 
-  /// Epoch-anchored cloning: clones are created only at REFERENCE-camera frame times; other
-  /// cameras' frames snap onto the previous epoch clone (known residual enters the measurement
-  /// model) instead of spawning their own clones. Restores the full clone-window baseline for
-  /// unsynced multi-camera rigs (defect B1). Frames with no bindable epoch fall back to cloning.
+  /// Unsynchronized epoch policy: retain camera-owned stochastic exposure
+  /// views in physical time, with a bounded time window resolved from declared
+  /// rates. This carries the transport process noise and state cross terms
+  /// through delayed visual updates; raw observation timestamps never snap.
   bool epoch_mode = false;
 
-  /// Epoch binding horizon as a multiple of the reference camera's frame period
-  double epoch_bind_factor = 1.2;
+  /// Opt-in stochastic clone at every independent camera's raw frame time.
+  /// Normal propagation owns the complete clone covariance and cross blocks.
+  /// This expands only the total pose capacity;
+  /// per-camera feature graduation still uses the configured max_clones.
+  /// Pose time remains raw frame time + reference td; the existing relative
+  /// per-camera td and rolling-shutter transport models remain in use.
+  /// Default off until timing, memory and trajectory comparisons are validated.
+  bool async_frame_clones = false;
 
-  /// Analytic IMU-bias columns from the preintegration bridge (escape hatch: set false if
-  /// vibration/mismodeling lets camera residuals over-drive the biases)
-  bool epoch_bridge_bias_cols = true;
+  /// Group hardware-synchronized views at the reference camera's timestamp
+  /// while retaining independent mono tracking when use_stereo is false.
+  bool force_camera_sync = false;
+
+  bool synchronize_camera_timestamps() const { return state_options.num_cameras > 1 && (force_camera_sync || use_stereo); }
+  bool use_async_frame_clones() const { return async_frame_clones && state_options.num_cameras > 1 && !synchronize_camera_timestamps(); }
+  bool use_epoch_clones() const { return epoch_mode && !synchronize_camera_timestamps() && !use_async_frame_clones() && !state_options.physical_camera_clones; }
+
+  /// Resolve only after camera count and tracker association mode are known.
+  /// Independent cameras otherwise consume separate clones and can halve each
+  /// view's temporal baseline, preventing persistent landmark initialization.
+  /// An explicit YAML/ROS setting wins; programmatic options remain untouched.
+  void resolve_camera_epoch_mode(const std::shared_ptr<ov_core::YamlParser> &parser = nullptr) {
+    enforce_stereo_guard();
+    if (parser != nullptr) {
+      parser->parse_config("force_camera_sync", force_camera_sync, false);
+      epoch_mode = state_options.num_cameras > 1 && !synchronize_camera_timestamps();
+      parser->parse_config("epoch_mode", epoch_mode, false);
+      parser->parse_config("async_frame_clones", async_frame_clones, false);
+      parser->parse_config("physical_camera_clones", state_options.physical_camera_clones, false);
+    }
+    PRINT_DEBUG("  - epoch_mode: %d\n", epoch_mode);
+    PRINT_DEBUG("  - force_camera_sync: %d\n", force_camera_sync);
+    PRINT_DEBUG("  - async_frame_clones: %d\n", async_frame_clones);
+    PRINT_DEBUG("  - physical_camera_clones: %d\n", state_options.physical_camera_clones);
+  }
 
   /// Async camera ingest: per-camera ring capacity (frames)
   int async_ring_size = 16;
@@ -279,7 +305,7 @@ struct VioManagerOptions {
   std::map<size_t, bool> camera_shutter_rolling;
 
   /// Per-camera NOMINAL frame rate (Hz) from the estimator config (camN_fps). Used to seed the
-  /// epoch-period/staleness EMAs before they converge and to sanity-check the readout time.
+  /// staleness EMAs, size the epoch exposure window, and check the readout time.
   /// 0 = undeclared.
   std::map<size_t, double> camera_fps;
 
@@ -294,6 +320,59 @@ struct VioManagerOptions {
 
   /// Mask images for each camera
   std::map<size_t, cv::Mat> masks;
+
+  /// Load only the IMU chain after state_options selected its model.
+  /// Shared by normal option loading and boot-time calibration gauge planning.
+  void load_imu_intrinsics(const std::shared_ptr<ov_core::YamlParser> &parser) {
+    if (!parser) return;
+    // IMU intrinsics
+    Eigen::Matrix3d Tw = Eigen::Matrix3d::Identity();
+    parser->parse_external("relative_config_imu", "imu0", "Tw", Tw);
+    Eigen::Matrix3d Ta = Eigen::Matrix3d::Identity();
+    parser->parse_external("relative_config_imu", "imu0", "Ta", Ta);
+    Eigen::Matrix3d R_IMUtoACC = Eigen::Matrix3d::Identity();
+    parser->parse_external("relative_config_imu", "imu0", "R_IMUtoACC", R_IMUtoACC);
+    Eigen::Matrix3d R_IMUtoGYRO = Eigen::Matrix3d::Identity();
+    parser->parse_external("relative_config_imu", "imu0", "R_IMUtoGYRO", R_IMUtoGYRO);
+    Eigen::Matrix3d Tg = Eigen::Matrix3d::Zero();
+    parser->parse_external("relative_config_imu", "imu0", "Tg", Tg);
+
+    // Generate the parameters we need
+    // TODO: error here if this returns a NaN value (i.e. invalid matrix specified)
+    Eigen::Matrix3d Dw = Tw.colPivHouseholderQr().solve(Eigen::Matrix3d::Identity());
+    Eigen::Matrix3d Da = Ta.colPivHouseholderQr().solve(Eigen::Matrix3d::Identity());
+    Eigen::Matrix3d R_ACCtoIMU = R_IMUtoACC.transpose();
+    Eigen::Matrix3d R_GYROtoIMU = R_IMUtoGYRO.transpose();
+    if (!ov_core::numeric::finite_matrix(Tw) || !ov_core::numeric::finite_matrix(Dw)) {
+      std::stringstream ss;
+      ss << "gyroscope has bad intrinsic values!" << std::endl;
+      ss << "Tw - " << std::endl << Tw << std::endl << std::endl;
+      ss << "Dw - " << std::endl << Dw << std::endl << std::endl;
+      PRINT_DEBUG(RED "" RESET, ss.str().c_str());
+      std::exit(EXIT_FAILURE);
+    }
+    if (!ov_core::numeric::finite_matrix(Ta) || !ov_core::numeric::finite_matrix(Da)) {
+      std::stringstream ss;
+      ss << "accelerometer has bad intrinsic values!" << std::endl;
+      ss << "Ta - " << std::endl << Ta << std::endl << std::endl;
+      ss << "Da - " << std::endl << Da << std::endl << std::endl;
+      PRINT_DEBUG(RED "" RESET, ss.str().c_str());
+      std::exit(EXIT_FAILURE);
+    }
+
+    // kalibr model: lower triangular of the matrix and R_GYROtoI
+    // rpng model: upper triangular of the matrix and R_ACCtoI
+    if (state_options.imu_model == StateOptions::ImuModel::KALIBR) {
+      vec_dw << Dw.block<3, 1>(0, 0), Dw.block<2, 1>(1, 1), Dw(2, 2);
+      vec_da << Da.block<3, 1>(0, 0), Da.block<2, 1>(1, 1), Da(2, 2);
+    } else {
+      vec_dw << Dw(0, 0), Dw.block<2, 1>(0, 1), Dw.block<3, 1>(0, 2);
+      vec_da << Da(0, 0), Da.block<2, 1>(0, 1), Da.block<3, 1>(0, 2);
+    }
+    vec_tg << Tg.block<3, 1>(0, 0), Tg.block<3, 1>(0, 1), Tg.block<3, 1>(0, 2);
+    q_GYROtoIMU = ov_core::rot_2_quat(R_GYROtoIMU);
+    q_ACCtoIMU = ov_core::rot_2_quat(R_ACCtoIMU);
+  }
 
   /**
    * @brief This function will load and print all state parameters (e.g. sensor extrinsics)
@@ -376,7 +455,7 @@ struct VioManagerOptions {
         parser->parse_config("cam" + std::to_string(i) + "_shutter", shutter, false);
         double fps = 0.0;
         parser->parse_config("cam" + std::to_string(i) + "_fps", fps, false);
-        if (fps < 0.0 || !std::isfinite(fps)) {
+        if (fps < 0.0 || !ov_core::numeric::finite(fps)) {
           PRINT_ERROR(RED "VioManager(): cam%d_fps (%.3f) must be a finite rate in Hz (or omitted)\n" RESET, i, fps);
           std::exit(EXIT_FAILURE);
         }
@@ -427,7 +506,7 @@ struct VioManagerOptions {
           std::string mask_node = "mask" + std::to_string(i);
           parser->parse_config(mask_node, mask_path);
           std::string total_mask_path = parser->get_config_folder() + mask_path;
-          if (!boost::filesystem::exists(total_mask_path)) {
+          if (!ov_core::fs_exists(total_mask_path)) {
             PRINT_ERROR(RED "VioManager(): invalid mask path:\n" RESET);
             PRINT_ERROR(RED "\t- mask%d - %s\n" RESET, i, total_mask_path.c_str());
             std::exit(EXIT_FAILURE);
@@ -444,53 +523,7 @@ struct VioManagerOptions {
         }
       }
 
-      // IMU intrinsics
-      Eigen::Matrix3d Tw = Eigen::Matrix3d::Identity();
-      parser->parse_external("relative_config_imu", "imu0", "Tw", Tw);
-      Eigen::Matrix3d Ta = Eigen::Matrix3d::Identity();
-      parser->parse_external("relative_config_imu", "imu0", "Ta", Ta);
-      Eigen::Matrix3d R_IMUtoACC = Eigen::Matrix3d::Identity();
-      parser->parse_external("relative_config_imu", "imu0", "R_IMUtoACC", R_IMUtoACC);
-      Eigen::Matrix3d R_IMUtoGYRO = Eigen::Matrix3d::Identity();
-      parser->parse_external("relative_config_imu", "imu0", "R_IMUtoGYRO", R_IMUtoGYRO);
-      Eigen::Matrix3d Tg = Eigen::Matrix3d::Zero();
-      parser->parse_external("relative_config_imu", "imu0", "Tg", Tg);
-
-      // Generate the parameters we need
-      // TODO: error here if this returns a NaN value (i.e. invalid matrix specified)
-      Eigen::Matrix3d Dw = Tw.colPivHouseholderQr().solve(Eigen::Matrix3d::Identity());
-      Eigen::Matrix3d Da = Ta.colPivHouseholderQr().solve(Eigen::Matrix3d::Identity());
-      Eigen::Matrix3d R_ACCtoIMU = R_IMUtoACC.transpose();
-      Eigen::Matrix3d R_GYROtoIMU = R_IMUtoGYRO.transpose();
-      if (std::isnan(Tw.norm()) || std::isnan(Dw.norm())) {
-        std::stringstream ss;
-        ss << "gyroscope has bad intrinsic values!" << std::endl;
-        ss << "Tw - " << std::endl << Tw << std::endl << std::endl;
-        ss << "Dw - " << std::endl << Dw << std::endl << std::endl;
-        PRINT_DEBUG(RED "" RESET, ss.str().c_str());
-        std::exit(EXIT_FAILURE);
-      }
-      if (std::isnan(Ta.norm()) || std::isnan(Da.norm())) {
-        std::stringstream ss;
-        ss << "accelerometer has bad intrinsic values!" << std::endl;
-        ss << "Ta - " << std::endl << Ta << std::endl << std::endl;
-        ss << "Da - " << std::endl << Da << std::endl << std::endl;
-        PRINT_DEBUG(RED "" RESET, ss.str().c_str());
-        std::exit(EXIT_FAILURE);
-      }
-
-      // kalibr model: lower triangular of the matrix and R_GYROtoI
-      // rpng model: upper triangular of the matrix and R_ACCtoI
-      if (state_options.imu_model == StateOptions::ImuModel::KALIBR) {
-        vec_dw << Dw.block<3, 1>(0, 0), Dw.block<2, 1>(1, 1), Dw(2, 2);
-        vec_da << Da.block<3, 1>(0, 0), Da.block<2, 1>(1, 1), Da(2, 2);
-      } else {
-        vec_dw << Dw(0, 0), Dw.block<2, 1>(0, 1), Dw.block<3, 1>(0, 2);
-        vec_da << Da(0, 0), Da.block<2, 1>(0, 1), Da.block<3, 1>(0, 2);
-      }
-      vec_tg << Tg.block<3, 1>(0, 0), Tg.block<3, 1>(0, 1), Tg.block<3, 1>(0, 2);
-      q_GYROtoIMU = ov_core::rot_2_quat(R_GYROtoIMU);
-      q_ACCtoIMU = ov_core::rot_2_quat(R_ACCtoIMU);
+      load_imu_intrinsics(parser);
     }
     PRINT_DEBUG("STATE PARAMETERS:\n");
     PRINT_DEBUG("  - gravity_mag: %.4f\n", gravity_mag);
@@ -544,8 +577,17 @@ struct VioManagerOptions {
 
   // TRACKERS ===============================
 
-  /// If we should process two cameras are being stereo or binocular. If binocular, we do monocular feature tracking on each image.
-  bool use_stereo = true;
+  /// Stereo association is temporarily disabled; each camera tracks monocular features.
+  bool use_stereo = false;
+
+  /// Apply before resolving camera timing or constructing any tracker, including after configuration overrides.
+  void enforce_stereo_guard() {
+    if (use_stereo) {
+      PRINT_WARNING(YELLOW "Stereo Tracking is under R&D, release coming soon\n" RESET);
+    }
+    use_stereo = false;
+    init_options.use_stereo = false;
+  }
 
   /// If we should use KLT tracking, or descriptor matcher
   bool use_klt = true;
@@ -653,6 +695,7 @@ struct VioManagerOptions {
       parser->parse_config("knn_ratio", knn_ratio);
       parser->parse_config("track_frequency", track_frequency);
     }
+    enforce_stereo_guard();
     PRINT_DEBUG("FEATURE TRACKING PARAMETERS:\n");
     PRINT_DEBUG("  - use_stereo: %d\n", use_stereo);
     PRINT_DEBUG("  - use_klt: %d\n", use_klt);
@@ -715,7 +758,8 @@ struct VioManagerOptions {
   /// Defaults to calib_camimu_dt for every camera (legacy single-offset behavior). Keys: sim_camimu_dt_camN.
   std::vector<double> sim_camimu_dts;
 
-  /// Per-camera TRUE rolling-shutter readout times in seconds (row v sampled at event time + (v/h)*readout).
+  /// Per-camera TRUE rolling-shutter readout times in seconds (row v sampled at event time +
+  /// (v/h - 0.5)*readout -- centered, frame stamps anchor mid-frame).
   /// Zero (default) = global shutter, which short-circuits to the legacy projection path. Keys: sim_readout_camN.
   std::vector<double> sim_cam_readouts;
 

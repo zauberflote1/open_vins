@@ -1,0 +1,45 @@
+name: Host math and calibration
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      extended:
+        description: Also run full session E2E, Monte Carlo and remaining VINS trajectories.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-math-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-math:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/host-tests
+        with:
+          suite: fast
+
+  host-math-extended:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended)
+    needs: host-math
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/host-tests
+        with:
+          suite: extended
